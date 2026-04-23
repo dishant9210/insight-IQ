@@ -1,52 +1,66 @@
+import uuid, os
 import pandas as pd
 import duckdb
-import uuid
-import os
 from fastapi import UploadFile
+from app.services.loader import get_loader
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# In-memory store: dataset_id → file path
-# Week 2 will move this to Redis/Postgres
-_datasets: dict[str, str] = {}
+_datasets: dict[str, dict] = {}   # dataset_id → {path, ext, columns, dtypes}
 
 async def save_and_parse(file: UploadFile) -> dict:
-    """Save uploaded CSV and return metadata."""
     dataset_id = str(uuid.uuid4())
-    file_path = f"{UPLOAD_DIR}/{dataset_id}.csv"
+    ext = "." + file.filename.rsplit(".", 1)[-1].lower()
+    file_path = f"{UPLOAD_DIR}/{dataset_id}{ext}"
 
-    # Write file to disk
     contents = await file.read()
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    # Parse with pandas to get metadata
-    df = pd.read_csv(file_path)
+    # Factory picks the right loader
+    loader = get_loader(file.filename)
+    result = loader.load(file_path)
 
-    _datasets[dataset_id] = file_path
+    # For non-CSV formats, also save a CSV copy for DuckDB compatibility
+    csv_path = f"{UPLOAD_DIR}/{dataset_id}.csv"
+    if ext != ".csv":
+        result.df.to_csv(csv_path, index=False)
+
+    _datasets[dataset_id] = {
+        "path": csv_path if ext != ".parquet" else file_path,
+        "ext": ext,
+        "columns": result.df.columns.tolist(),
+        "dtypes": result.detected_types,
+        "sample": result.df.head(5).to_dict(orient="records"),
+    }
 
     return {
         "dataset_id": dataset_id,
         "filename": file.filename,
-        "rows": len(df),
-        "columns": df.columns.tolist(),
-        "preview": df.head(5).to_dict(orient="records"),
-        "dtypes": df.dtypes.astype(str).to_dict(),  # column → type
+        "rows": result.row_count,
+        "columns": result.df.columns.tolist(),
+        "preview": result.df.head(5).to_dict(orient="records"),
+        "warnings": result.warnings,    # show user if encoding was fixed etc.
+        "detected_types": result.detected_types,
     }
 
 def execute_query(dataset_id: str, sql: str) -> list[dict]:
-    """Run SQL on the uploaded CSV using DuckDB."""
-    file_path = _datasets.get(dataset_id)
-    if not file_path:
-        raise ValueError(f"Dataset {dataset_id} not found")
+    meta = _datasets[dataset_id]   # now stores {path, ext}
+    file_path = meta["path"]
+    ext = meta["ext"]
 
-    # DuckDB can query CSV files directly — no DB setup needed
     conn = duckdb.connect()
-    # Register the CSV as a table named 'data'
-    conn.execute(f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{file_path}')")
 
-    result = conn.execute(sql).fetchdf()  # returns a pandas DataFrame
+    if ext == ".parquet":
+        # DuckDB reads Parquet natively — no load needed
+        conn.execute(f"CREATE VIEW data AS SELECT * FROM read_parquet('{file_path}')")
+    else:
+        # CSV/JSON/Excel: file already converted to CSV on disk
+        conn.execute(f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{file_path}')")
+
+    result = conn.execute(sql).fetchdf()
     conn.close()
 
     return result.to_dict(orient="records")
+
+   
