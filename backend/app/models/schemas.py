@@ -7,7 +7,7 @@ class QueryRequest(BaseModel):
     conversation_id: Optional[str] = None
 
 class QueryResponse(BaseModel):
-    sql: str
+    question: str
     result: list[dict[str, Any]]
     insight: str
     chart_type: str  # "bar" | "line" | "pie" | "table"

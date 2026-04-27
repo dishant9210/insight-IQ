@@ -3,15 +3,15 @@ from app.models.schemas import QueryRequest, QueryResponse
 from app.services.llm_service import answer_question
 from app.services.dataset_service import _datasets
 import pandas as pd
+import json
 
 router = APIRouter(prefix="/api", tags=["query"])
 
 @router.post("/query", response_model=QueryResponse)
 async def query_dataset(req: QueryRequest):
-    
     if req.dataset_id not in _datasets:
         raise HTTPException(404, "Dataset not found. Upload a CSV first.")
-    print(req.dataset_id)
+   
     # Get schema info from the stored CSV
     file_path = _datasets[req.dataset_id]["path"]
     # file_path+=".csv"
