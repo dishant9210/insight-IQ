@@ -10,6 +10,12 @@ import os
 
 load_dotenv()
 
+origins = [
+    "http://localhost:5173",  # Vite default
+    "http://127.0.0.1:5173", # Some browsers prefer the IP
+    # "http://localhost:3000",  # Standard React default
+]
+
 app = FastAPI(
     title="InsightIQ",
     description="Natural language analytics",
@@ -18,7 +24,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(","),
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

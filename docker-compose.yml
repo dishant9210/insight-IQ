@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: ./backend
+    container_name: insight_iq_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env  
+    environment:
+    
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PYTHONPATH=/app
+      
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      # This prevents Docker from overwriting your container's node_modules 
+      # with your local ones if they differ
+      - /app/node_modules
+    depends_on:
+      - backend
