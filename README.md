@@ -1,62 +1,78 @@
-InsightIQ: Conversational Data Analysis
-InsightIQ is an AI-powered platform designed to democratize data analysis. It allows users to upload datasets and ask complex questions in plain English. The system translates natural language into optimized SQL, executes it in real-time, and provides AI-driven insights.
+<div align="center">
+  <img src="https://cdn-icons-png.flaticon.com/512/2103/2103633.png" alt="InsightIQ Logo" width="120">
+  <h1>InsightIQ</h1>
+  <p><b>Talk to your data. Get instant answers.</b></p>
 
-Key Features (Week 1 Milestone)
-Natural Language to SQL: Powered by Groq (Llama 3) and OpenAI for sub-second, accurate query generation.
+  ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
+  ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
+  ![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&logo=duckdb&logoColor=black)
+  ![Groq](https://img.shields.io/badge/Groq-f55036?style=for-the-badge)
+  ![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)
 
-High-Performance Execution: Uses DuckDB and Pandas to query CSV/Excel files directly without the overhead of a traditional database.
+  <p>
+    <a href="#-key-features">Features</a> •
+    <a href="#-getting-started">Installation</a> •
+    <a href="#-roadmap">Roadmap</a> •
+    <a href="#-tech-stack">Stack</a>
+  </p>
+</div>
 
-Interactive UI: A modern React dashboard with dynamic results tables and SQL transparency (view the code the AI wrote).
+---
 
-Containerized Architecture: Fully Dockerized services for both frontend and backend to ensure environment consistency.
+## 📖 About InsightIQ
+InsightIQ is an AI-powered conversational analytics platform. It bridges the gap between raw data and decision-making by allowing users to query CSV/Excel files using plain English. No SQL knowledge? No problem. 
 
-Tech Stack
-Backend
-FastAPI: High-performance Python web framework.
+Our engine uses **Llama 3 (via Groq)** for lightning-fast SQL generation and **DuckDB** for analytical processing directly within your browser's reach.
 
-LangChain: Framework for developing applications powered by language models.
+---
 
-DuckDB: In-process SQL OLAP database management system.
+## 🚀 Key Features
 
-Pydantic: Data validation and settings management.
+### 🧠 **Conversational Intelligence**
+Ask questions like *"Who are my top 10 customers by revenue?"* or *"Show me the monthly trend of sales,"* and watch the AI generate precise SQL.
 
-Frontend
-React (Vite): Modern frontend framework for a fast development experience.
+### ⚡ **Extreme Performance**
+By leveraging **Groq LPU™ inference** and **DuckDB**, InsightIQ provides sub-second responses even on complex analytical queries.
 
-Tailwind CSS: Utility-first CSS framework for clean, responsive design.
+### 🐳 **Developer First**
+Fully containerized with Docker. One command and your entire full-stack environment is ready to go.
 
-DevOps & Tools
-Docker / Docker Compose: For microservices orchestration.
+---
 
-Groq LPU™: Used for high-speed LLM inference.
+## 🛠 Tech Stack
 
-Getting Started
-Prerequisites
-Docker and Docker Compose installed.
+| Layer | Technology |
+| :--- | :--- |
+| **Frontend** | React 18, Vite, Tailwind CSS, Axios |
+| **Backend** | FastAPI, LangChain, Pydantic |
+| **Database** | DuckDB (OLAP), Pandas |
+| **AI/LLM** | Groq (Llama 3), OpenAI |
+| **Infrastructure** | Docker, Docker Compose |
 
-API Keys for OpenAI and Groq.
+---
 
-Installation
-Clone the Repository
+## 🚦 Getting Started
 
-Bash
-git clone https://github.com/your-username/insight-iq.git
+### 1. Clone the repo
+```bash
+git clone [https://github.com/yourusername/insight-iq.git](https://github.com/yourusername/insight-iq.git)
 cd insight-iq
-Configure Environment Variables
-Create a .env file in the root directory:
+```
 
-Code snippet
-OPENAI_API_KEY=your_openai_key
-GROQ_API_KEY=your_groq_key
-Launch the Application
+2. Set up Environment Variables
+Create a .env file in the root folder:
 
-Bash
-docker-compose up --build
-Access the Platform
+ENV
+
+```bash
+GROQ_API_KEY=gsk_your_key_here
+OPENAI_API_KEY=sk_your_key_here
+```
+
+3. Spin up the containers
+```Bash
+docker-compose up --build```
 
 Frontend: http://localhost:5173
 
-Backend API: http://localhost:8000
-
-git commit -m "add README"
-git branch -M main
+API Docs: http://localhost:8000/docs
