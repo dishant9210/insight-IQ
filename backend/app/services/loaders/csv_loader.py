@@ -30,7 +30,7 @@ class CsvLoader(BaseLoader):
                 sample = df[col].dropna().head(10).astype(str)
                 if sample.str.match(r"\d{4}[-/]\d{2}[-/]\d{2}").mean() > 0.7:
                     try:
-                        df[col] = pd.to_datetime(df[col], infer_datetime_format=True)
+                        df[col] = pd.to_datetime(df[col])
                         warnings.append(f"Column '{col}' parsed as datetime")
                     except Exception:
                         pass

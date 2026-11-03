@@ -8,9 +8,11 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     question: Optional[str] = None
+    sql: str
     result: list[dict[str, Any]]
     insight: str
     chart_type: str  # "bar" | "line" | "pie" | "table"
+    truncated: bool = False
 
 class UploadResponse(BaseModel):
     dataset_id: str
@@ -18,3 +20,5 @@ class UploadResponse(BaseModel):
     rows: int
     columns: list[str]
     preview: list[dict[str, Any]]  # first 5 rows
+    warnings: list[str] = []
+    detected_types: dict[str, str] = {}
