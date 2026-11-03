@@ -143,7 +143,7 @@ The backend runs on [Fly.io](https://fly.io) with a persistent volume for the Du
 ```bash
 cd backend
 fly launch --no-deploy        # picks up fly.toml; change the app name if it's taken
-fly volumes create insightiq_data --size 1 --region bom
+fly volumes create insightiq_data --size 1 --region sin
 fly secrets set GROQ_API_KEY=gsk_...
 fly deploy
 ```
