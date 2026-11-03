@@ -131,7 +131,38 @@ npm install
 npm run dev
 ```
 
-Frontend: http://localhost:5173 · API docs: http://localhost:8000/docs
+Local dev: http://localhost:5173 · API docs: http://localhost:8000/docs · Docker Compose: http://localhost:8080
+
+---
+
+## 🚀 Deployment
+
+The backend runs on [Fly.io](https://fly.io) with a persistent volume for the DuckDB files; the frontend is a static Vite build on [Vercel](https://vercel.com).
+
+### Backend (Fly.io)
+```bash
+cd backend
+fly launch --no-deploy        # picks up fly.toml; change the app name if it's taken
+fly volumes create insightiq_data --size 1 --region bom
+fly secrets set GROQ_API_KEY=gsk_...
+fly deploy
+```
+`fly.toml` sets `UPLOAD_DIR=/data/uploads` on the mounted volume, a `/health` check, and lets the machine stop when idle so a free-tier app costs nothing between visits. Datasets older than `DATASET_TTL_HOURS` are deleted on the next upload.
+
+### Frontend (Vercel)
+Import the repo in Vercel, set the root directory to `frontend`, and add one environment variable:
+
+| Variable | Value |
+| :--- | :--- |
+| `VITE_API_URL` | `https://<your-fly-app>.fly.dev` |
+
+Then point the backend's CORS at the Vercel URL:
+```bash
+fly secrets set ALLOWED_ORIGINS=https://<your-app>.vercel.app
+```
+
+### Docker Compose (self-hosted)
+`docker compose up --build` builds both images — the frontend as an nginx-served static bundle, the backend with a named volume for data — and serves the app on http://localhost:8080.
 
 ---
 

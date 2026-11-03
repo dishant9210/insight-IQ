@@ -1,4 +1,4 @@
-import uuid, os, json, threading
+import uuid, os, json, time, threading
 import duckdb
 import pandas as pd
 from fastapi import UploadFile, HTTPException
@@ -8,6 +8,7 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 QUERY_TIMEOUT = float(os.getenv("QUERY_TIMEOUT_SECONDS", "20"))
 MAX_RESULT_ROWS = int(os.getenv("MAX_RESULT_ROWS", "1000"))
+DATASET_TTL = float(os.getenv("DATASET_TTL_HOURS", "24")) * 3600   # 0 = keep forever
 CHUNK = 1024 * 1024
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -32,10 +33,38 @@ def _load_registry():
         if os.path.exists(_db_path(meta["dataset_id"])):
             _datasets[meta["dataset_id"]] = meta
 
+def _cleanup_old():
+    if not DATASET_TTL:
+        return
+    cutoff = time.time() - DATASET_TTL
+    for name in os.listdir(UPLOAD_DIR):
+        if not name.endswith(".json"):
+            continue
+        dataset_id = name[:-5]
+        path = _meta_path(dataset_id)
+        if os.path.getmtime(path) < cutoff:
+            for p in (path, _db_path(dataset_id)):
+                if os.path.exists(p):
+                    os.remove(p)
+            _datasets.pop(dataset_id, None)
+
+_cleanup_old()
 _load_registry()
 
 def get_dataset(dataset_id: str) -> dict:
+    # ids are uuids we minted — anything else is not a real dataset (and would
+    # otherwise be joined straight into a file path)
+    try:
+        uuid.UUID(dataset_id)
+    except ValueError:
+        raise HTTPException(404, "Dataset not found. Upload a file first.")
+
     meta = _datasets.get(dataset_id)
+    if meta is None and os.path.exists(_meta_path(dataset_id)) and os.path.exists(_db_path(dataset_id)):
+        # another worker (or a previous process) wrote it
+        with open(_meta_path(dataset_id)) as f:
+            meta = json.load(f)
+        _datasets[dataset_id] = meta
     if not meta:
         raise HTTPException(404, "Dataset not found. Upload a file first.")
     return meta
@@ -54,6 +83,7 @@ async def _write_upload(file: UploadFile, dest: str) -> int:
     return size
 
 async def save_and_parse(file: UploadFile) -> dict:
+    _cleanup_old()
     dataset_id = str(uuid.uuid4())
     ext = "." + file.filename.rsplit(".", 1)[-1].lower()
     raw_path = f"{UPLOAD_DIR}/{dataset_id}{ext}"

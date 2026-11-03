@@ -1,0 +1,37 @@
+app = "insightiq-api"
+primary_region = "bom"
+
+[build]
+
+[env]
+  UPLOAD_DIR = "/data/uploads"
+  MAX_UPLOAD_MB = "50"
+  MAX_RESULT_ROWS = "1000"
+  QUERY_TIMEOUT_SECONDS = "20"
+  DATASET_TTL_HOURS = "24"
+  # set after the frontend is deployed:
+  #   fly secrets set ALLOWED_ORIGINS=https://<your-app>.vercel.app
+  # and the model key:
+  #   fly secrets set GROQ_API_KEY=gsk_...
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/health"
+
+[[mounts]]
+  source = "insightiq_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
