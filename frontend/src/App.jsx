@@ -2,46 +2,24 @@ import { useState } from 'react';
 import FileUpload from './components/FileUpload';
 import ChatInput from './components/ChatInput';
 import ResultsTable from './components/ResultsTable';
+import { queryDataset } from './api';
 
 function App() {
-  const [queryData, setQueryData] = useState({
-    result: [],
-    insight: "",
-    sql: "",
-    chart_type: ""
-  });
+  const [dataset, setDataset] = useState(null);
+  const [queryData, setQueryData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [fileId, setFileId] = useState(null); // Track the current active file
+  const [error, setError] = useState('');
 
-  const handleQuery = async (userText) => {
+  const handleQuery = async (question) => {
+    if (!question || !dataset) return;
     setLoading(true);
+    setError('');
     try {
-      
-      if (!userText || !fileId) {
-        console.error("Invalid input: userText or fileId is missing");
-        return;
-      }      
-      const response = await fetch('http://localhost:8000/api/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          question: userText,
-          dataset_id: fileId // Tells backend which uploaded file to query
-        })
-      });
-      const data = await response.json();
-      console.log(data)
-     
-      setQueryData({
-        result : data.result,
-        insight : data.insight,
-        sql : data.sql,
-        chart_type : data.chart_type
-      });
-
-      console.log(queryData);
+      const data = await queryDataset(dataset.dataset_id, question);
+      setQueryData(data);
     } catch (err) {
-      console.error("Query failed", err);
+      setQueryData(null);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -54,10 +32,22 @@ function App() {
         <p className="text-slate-500">Conversational Data Analysis</p>
       </header>
 
-      <FileUpload onUploadSuccess={(data) => setFileId(data.dataset_id)} />
-      
-      <ChatInput onQuerySubmit={handleQuery} isLoading={loading} />
-      
+      <FileUpload
+        onUploadSuccess={(data) => {
+          setDataset(data);
+          setQueryData(null);
+          setError('');
+        }}
+      />
+
+      <ChatInput onQuerySubmit={handleQuery} isLoading={loading} disabled={!dataset} />
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+
       <ResultsTable queryData={queryData} />
     </div>
   );

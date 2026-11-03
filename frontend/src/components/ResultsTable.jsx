@@ -1,20 +1,16 @@
-import React from 'react';
-
 const ResultsTable = ({ queryData }) => {
-  // 1. Destructure for cleaner access
- const result = queryData?.result || [];
+  const result = queryData?.result || [];
   const insight = queryData?.insight || "";
   const sql = queryData?.sql || "";
-   console.log(queryData)
-  // Now, the rest of your logic won't crash!
-  if (result.length === 0) return null;
+  const truncated = queryData?.truncated || false;
 
-  // 3. Extract headers from the array of objects
-  const headers = Object.keys(result[0]);
+  if (!queryData) return null;
+
+  const headers = result.length ? Object.keys(result[0]) : [];
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      
+
       {/* LLM Insight Section */}
       {insight && (
         <div className="bg-white p-6 rounded-xl border border-blue-100 shadow-sm border-l-4 border-l-blue-500">
@@ -24,32 +20,39 @@ const ResultsTable = ({ queryData }) => {
       )}
 
       {/* Main Data Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                {headers.map((header) => (
-                  <th key={header} className="px-6 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    {header}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {result.map((row, rowIndex) => (
-                <tr key={rowIndex} className="hover:bg-slate-50/50 transition-colors">
+      {result.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
                   {headers.map((header) => (
-                    <td key={header} className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">
-                      {row[header]?.toString() || "—"}
-                    </td>
+                    <th key={header} className="px-6 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {header}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {result.map((row, rowIndex) => (
+                  <tr key={rowIndex} className="hover:bg-slate-50/50 transition-colors">
+                    {headers.map((header) => (
+                      <td key={header} className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">
+                        {row[header] === null || row[header] === undefined ? "—" : String(row[header])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {truncated && (
+            <p className="px-6 py-2 text-xs text-slate-500 bg-slate-50 border-t border-slate-200">
+              Showing the first {result.length.toLocaleString()} rows.
+            </p>
+          )}
         </div>
-      </div>
+      )}
 
       {/* SQL Transparency Section */}
       {sql && (
