@@ -12,11 +12,6 @@ from app.services.dataset_service import execute_query
 
 load_dotenv()
 
-# temperature 0 — we want the same question to produce the same SQL
-llm = ChatGroq(
-    model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
-    temperature=0,
-)
 
 SQL_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a SQL expert. Given a dataset schema and a question,
@@ -52,8 +47,21 @@ def _schema_str(tables: list[dict]) -> str:
         )
     return "\n\n".join(parts)
 
-sql_chain = SQL_PROMPT | llm | StrOutputParser()
-insight_chain = INSIGHT_PROMPT | llm | StrOutputParser()
+# Built on first use, so the api (and /health, /ready, uploads) still starts
+# without a Groq key — only answering questions needs one.
+sql_chain = None
+insight_chain = None
+
+def _chains():
+    global sql_chain, insight_chain
+    if sql_chain is None or insight_chain is None:
+        if not os.getenv("GROQ_API_KEY"):
+            raise HTTPException(503, "GROQ_API_KEY is not set on the server, so questions can't be answered yet.")
+        # temperature 0 — we want the same question to produce the same SQL
+        llm = ChatGroq(model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"), temperature=0)
+        sql_chain = SQL_PROMPT | llm | StrOutputParser()
+        insight_chain = INSIGHT_PROMPT | llm | StrOutputParser()
+    return sql_chain, insight_chain
 
 def _fail(status: int, detail: str, sql: str) -> HTTPException:
     # keep the SQL on the error so the query log can record what the model wrote
@@ -79,6 +87,7 @@ async def answer_question(
     schema = _schema_str(tables)
 
     # Step 1: Generate SQL
+    sql_chain, insight_chain = _chains()
     raw_sql = await _ask(sql_chain, {
         "schema": schema,
         "question": question

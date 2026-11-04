@@ -52,3 +52,12 @@ def test_every_query_is_logged(client, sales, fake_llm):
     assert (ok.status, ok.question, ok.sql, ok.row_count) == ("ok", "how many rows", "SELECT count(*) AS n FROM data", 1)
     assert bad.status == "error" and bad.sql == "SELECT nope FROM data" and "nope" in bad.error
     assert ok.latency_ms >= 0
+
+def test_missing_groq_key_is_a_clear_503(client, sales, monkeypatch):
+    # the api must still start and accept uploads without a key; only questions need it
+    from app.services import llm_service
+    monkeypatch.delenv("GROQ_API_KEY")
+    monkeypatch.setattr(llm_service, "sql_chain", None)
+    monkeypatch.setattr(llm_service, "insight_chain", None)
+    r = ask(client, sales["dataset_id"])
+    assert r.status_code == 503 and "GROQ_API_KEY" in r.json()["detail"]
