@@ -2,6 +2,7 @@
   <img src="https://cdn-icons-png.flaticon.com/512/2103/2103633.png" alt="InsightIQ Logo" width="120">
   <h1>InsightIQ</h1>
   <p><b>Talk to your data. Get instant answers.</b></p>
+  <p><a href="https://insightiq-web.fly.dev"><b>Live demo</b></a> · <a href="https://insightiq-api.fly.dev/health">API</a></p>
 
   ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
   ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
@@ -137,9 +138,9 @@ Local dev: http://localhost:5173 · API docs: http://localhost:8000/docs · Dock
 
 ## 🚀 Deployment
 
-The backend runs on [Fly.io](https://fly.io) with a persistent volume for the DuckDB files; the frontend is a static Vite build on [Vercel](https://vercel.com).
+Both halves run on [Fly.io](https://fly.io): the API with a persistent volume for the DuckDB files, and the frontend as a static Vite build served by nginx. Live at https://insightiq-web.fly.dev (machines stop when idle, so the first request can take a few seconds).
 
-### Backend (Fly.io)
+### Backend
 ```bash
 cd backend
 fly launch --no-deploy        # picks up fly.toml; change the app name if it's taken
@@ -149,17 +150,18 @@ fly deploy
 ```
 `fly.toml` sets `UPLOAD_DIR=/data/uploads` on the mounted volume, a `/health` check, and lets the machine stop when idle so a free-tier app costs nothing between visits. Datasets older than `DATASET_TTL_HOURS` are deleted on the next upload.
 
-### Frontend (Vercel)
-Import the repo in Vercel, set the root directory to `frontend`, and add one environment variable:
-
-| Variable | Value |
-| :--- | :--- |
-| `VITE_API_URL` | `https://<your-fly-app>.fly.dev` |
-
-Then point the backend's CORS at the Vercel URL:
+### Frontend
+`VITE_API_URL` is baked in at build time from `frontend/fly.toml`, so change it there if your API app has a different name.
 ```bash
-fly secrets set ALLOWED_ORIGINS=https://<your-app>.vercel.app
+cd frontend
+fly apps create insightiq-web
+fly deploy
 ```
+Then point the backend's CORS at it:
+```bash
+fly secrets set ALLOWED_ORIGINS=https://insightiq-web.fly.dev -a insightiq-api
+```
+Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_API_URL`.
 
 ### Docker Compose (self-hosted)
 `docker compose up --build` builds both images — the frontend as an nginx-served static bundle, the backend with a named volume for data — and serves the app on http://localhost:8080.
@@ -182,4 +184,4 @@ fly secrets set ALLOWED_ORIGINS=https://<your-app>.vercel.app
 - [ ] Follow-up questions that remember the previous query
 - [ ] Rate limiting
 - [ ] Tests + CI
-- [ ] Hosted demo
+- [x] Hosted demo
