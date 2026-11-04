@@ -55,6 +55,12 @@ def _schema_str(tables: list[dict]) -> str:
 sql_chain = SQL_PROMPT | llm | StrOutputParser()
 insight_chain = INSIGHT_PROMPT | llm | StrOutputParser()
 
+def _fail(status: int, detail: str, sql: str) -> HTTPException:
+    # keep the SQL on the error so the query log can record what the model wrote
+    e = HTTPException(status, detail)
+    e.sql = sql
+    return e
+
 async def _ask(chain, inputs: dict) -> str:
     try:
         return await chain.ainvoke(inputs)
@@ -83,16 +89,16 @@ async def answer_question(
     try:
         validate_sql(sql)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise _fail(400, str(e), sql)
 
     # Step 3: Execute (off the event loop — DuckDB is synchronous)
     try:
         results, truncated = await asyncio.to_thread(execute_query, dataset_id, sql)
     except duckdb.InterruptException:
-        raise HTTPException(504, "Query timed out")
+        raise _fail(504, "Query timed out", sql)
     except duckdb.Error as e:
         # first line only — DuckDB appends a multi-line caret pointer
-        raise HTTPException(400, f"Query failed: {str(e).splitlines()[0]}")
+        raise _fail(400, f"Query failed: {str(e).splitlines()[0]}", sql)
 
     # Step 4: Generate insight
     if results:

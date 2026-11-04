@@ -4,6 +4,7 @@ import { uploadDataset } from '../api';
 const FileUpload = ({ onUploadSuccess }) => {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [uploaded, setUploaded] = useState(null);
 
@@ -13,13 +14,14 @@ const FileUpload = ({ onUploadSuccess }) => {
     setError('');
 
     try {
-      const data = await uploadDataset(file);
+      const data = await uploadDataset(file, { onStatus: setStatus });
       setUploaded(data);
       onUploadSuccess(data);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setStatus('');
     }
   };
 
@@ -36,7 +38,7 @@ const FileUpload = ({ onUploadSuccess }) => {
         disabled={loading || !file}
         className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:bg-slate-400 transition-colors"
       >
-        {loading ? "Processing..." : "Analyze File"}
+        {!loading ? "Analyze File" : status === 'pending' ? "Queued..." : "Processing..."}
       </button>
 
       {error && <p className="text-sm text-red-600">{error}</p>}

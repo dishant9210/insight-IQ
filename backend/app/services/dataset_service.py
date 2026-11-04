@@ -1,55 +1,67 @@
-import uuid, os, json, time, threading
+import uuid, os, json, threading
+from datetime import datetime, timedelta, timezone
 import duckdb
 import pandas as pd
 from fastapi import UploadFile, HTTPException
+from sqlalchemy import select
+
+from app.db import SessionLocal, Dataset, UPLOAD_DIR
+from app.queue import get_queue, JOB_TIMEOUT
 from app.services.loader import get_loader
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 QUERY_TIMEOUT = float(os.getenv("QUERY_TIMEOUT_SECONDS", "20"))
 MAX_RESULT_ROWS = int(os.getenv("MAX_RESULT_ROWS", "1000"))
 DATASET_TTL = float(os.getenv("DATASET_TTL_HOURS", "24")) * 3600   # 0 = keep forever
 CHUNK = 1024 * 1024
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-_datasets: dict[str, dict] = {}   # dataset_id → metadata (mirrored to <id>.json on disk)
-
 def _db_path(dataset_id: str) -> str:
     return f"{UPLOAD_DIR}/{dataset_id}.duckdb"
-
-def _meta_path(dataset_id: str) -> str:
-    return f"{UPLOAD_DIR}/{dataset_id}.json"
 
 def _records(df: pd.DataFrame) -> list[dict]:
     # to_json handles NaN → null, timestamps → ISO, numpy scalars → native
     return json.loads(df.to_json(orient="records", date_format="iso"))
 
-def _load_registry():
-    for name in os.listdir(UPLOAD_DIR):
-        if not name.endswith(".json"):
-            continue
-        with open(f"{UPLOAD_DIR}/{name}") as f:
-            meta = json.load(f)
-        if os.path.exists(_db_path(meta["dataset_id"])):
-            _datasets[meta["dataset_id"]] = meta
+def _remove(*paths: str):
+    for p in paths:
+        if os.path.exists(p):
+            os.remove(p)
 
-def _cleanup_old():
+def to_meta(ds: Dataset) -> dict:
+    return {
+        "dataset_id": ds.id,
+        "filename": ds.filename,
+        "status": ds.status,
+        "error": ds.error,
+        "rows": ds.rows or 0,
+        "columns": ds.columns or [],
+        "detected_types": ds.detected_types or {},
+        "preview": ds.preview or [],
+        "warnings": ds.warnings or [],
+        "tables": ds.tables or [],
+    }
+
+def tables_of(meta: dict) -> list[dict]:
+    """Table list for a dataset. Every format has at least one table called 'data'."""
+    return meta.get("tables") or [{
+        "name": "data",
+        "sheet": None,
+        "rows": meta["rows"],
+        "columns": meta["columns"],
+        "detected_types": meta["detected_types"],
+        "preview": meta["preview"],
+    }]
+
+def cleanup_old():
     if not DATASET_TTL:
         return
-    cutoff = time.time() - DATASET_TTL
-    for name in os.listdir(UPLOAD_DIR):
-        if not name.endswith(".json"):
-            continue
-        dataset_id = name[:-5]
-        path = _meta_path(dataset_id)
-        if os.path.getmtime(path) < cutoff:
-            for p in (path, _db_path(dataset_id)):
-                if os.path.exists(p):
-                    os.remove(p)
-            _datasets.pop(dataset_id, None)
-
-_cleanup_old()
-_load_registry()
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DATASET_TTL)
+    with SessionLocal() as s:
+        old = s.scalars(select(Dataset).where(Dataset.created_at < cutoff)).all()
+        for ds in old:
+            _remove(_db_path(ds.id))
+            s.delete(ds)
+        s.commit()
 
 def get_dataset(dataset_id: str) -> dict:
     # ids are uuids we minted — anything else is not a real dataset (and would
@@ -59,14 +71,18 @@ def get_dataset(dataset_id: str) -> dict:
     except ValueError:
         raise HTTPException(404, "Dataset not found. Upload a file first.")
 
-    meta = _datasets.get(dataset_id)
-    if meta is None and os.path.exists(_meta_path(dataset_id)) and os.path.exists(_db_path(dataset_id)):
-        # another worker (or a previous process) wrote it
-        with open(_meta_path(dataset_id)) as f:
-            meta = json.load(f)
-        _datasets[dataset_id] = meta
-    if not meta:
+    with SessionLocal() as s:
+        ds = s.get(Dataset, dataset_id)
+    if ds is None:
         raise HTTPException(404, "Dataset not found. Upload a file first.")
+    return to_meta(ds)
+
+def get_ready_dataset(dataset_id: str) -> dict:
+    meta = get_dataset(dataset_id)
+    if meta["status"] == "failed":
+        raise HTTPException(409, f"This dataset failed to load: {meta['error']}")
+    if meta["status"] != "ready":
+        raise HTTPException(409, "Dataset is still processing. Try again in a moment.")
     return meta
 
 async def _write_upload(file: UploadFile, dest: str) -> int:
@@ -82,16 +98,50 @@ async def _write_upload(file: UploadFile, dest: str) -> int:
         raise HTTPException(413, f"File too large. Limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     return size
 
-async def save_and_parse(file: UploadFile) -> dict:
-    _cleanup_old()
+async def save_upload(file: UploadFile) -> tuple[str, str, bool]:
+    """Store the raw file and register the dataset.
+    Returns (dataset_id, raw_path, queued) — queued is False when there's no Redis."""
+    cleanup_old()
     dataset_id = str(uuid.uuid4())
     ext = "." + file.filename.rsplit(".", 1)[-1].lower()
     raw_path = f"{UPLOAD_DIR}/{dataset_id}{ext}"
 
     await _write_upload(file, raw_path)
 
+    with SessionLocal() as s:
+        s.add(Dataset(id=dataset_id, filename=file.filename, status="pending", warnings=[]))
+        s.commit()
+
+    queue = get_queue()
+    if queue is None:
+        return dataset_id, raw_path, False
+
+    queue.enqueue_call(
+        ingest,
+        args=(dataset_id, raw_path, file.filename),
+        timeout=JOB_TIMEOUT,
+        result_ttl=0,
+        failure_ttl=24 * 3600,
+        job_id=dataset_id,
+    )
+    return dataset_id, raw_path, True
+
+def _set(dataset_id: str, **fields):
+    with SessionLocal() as s:
+        ds = s.get(Dataset, dataset_id)
+        if ds is None:          # cleaned up while it was queued
+            return
+        for k, v in fields.items():
+            setattr(ds, k, v)
+        s.commit()
+
+def ingest(dataset_id: str, raw_path: str, filename: str):
+    """Parse an uploaded file into its own DuckDB database. Runs on the worker
+    (or in-process without Redis); the outcome is recorded on the dataset row."""
+    _set(dataset_id, status="processing")
+    ext = "." + filename.rsplit(".", 1)[-1].lower()
     try:
-        results = get_loader(file.filename).load_all(raw_path)
+        results = get_loader(filename).load_all(raw_path)
 
         # Every format ends up as one DuckDB file so queries can open it read-only.
         # Workbooks get one table per sheet; "data" always points at the first one.
@@ -108,9 +158,13 @@ async def save_and_parse(file: UploadFile) -> dict:
                     db.execute(f'CREATE VIEW data AS SELECT * FROM "{results[0].name}"')
         finally:
             db.close()
+    except Exception as e:
+        _remove(_db_path(dataset_id))
+        error = e.detail if isinstance(e, HTTPException) else f"Could not parse file: {e}"
+        _set(dataset_id, status="failed", error=error)
+        return
     finally:
-        if os.path.exists(raw_path):
-            os.remove(raw_path)
+        _remove(raw_path)
 
     first = results[0]
     tables = [{
@@ -122,35 +176,20 @@ async def save_and_parse(file: UploadFile) -> dict:
         "preview": _records(r.df.head(5)),
     } for r in results]
 
-    meta = {
-        "dataset_id": dataset_id,
-        "filename": file.filename,
-        "rows": first.row_count,
-        "columns": first.df.columns.tolist(),
-        "detected_types": first.detected_types,
-        "preview": tables[0]["preview"],
-        "warnings": [w for r in results for w in r.warnings],
-        "tables": tables,
-    }
-    with open(_meta_path(dataset_id), "w") as f:
-        json.dump(meta, f)
-    _datasets[dataset_id] = meta
-    return meta
-
-def tables_of(meta: dict) -> list[dict]:
-    """Table list for a dataset. Datasets saved before multi-sheet support only have 'data'."""
-    return meta.get("tables") or [{
-        "name": "data",
-        "sheet": None,
-        "rows": meta["rows"],
-        "columns": meta["columns"],
-        "detected_types": meta["detected_types"],
-        "preview": meta["preview"],
-    }]
+    _set(
+        dataset_id,
+        status="ready",
+        rows=first.row_count,
+        columns=first.df.columns.tolist(),
+        detected_types=first.detected_types,
+        preview=tables[0]["preview"],
+        warnings=[w for r in results for w in r.warnings],
+        tables=tables,
+    )
 
 def execute_query(dataset_id: str, sql: str) -> tuple[list[dict], bool]:
     """Run an already-validated SELECT against a dataset. Returns (rows, truncated)."""
-    get_dataset(dataset_id)
+    get_ready_dataset(dataset_id)
 
     conn = duckdb.connect(_db_path(dataset_id), read_only=True)
     try:

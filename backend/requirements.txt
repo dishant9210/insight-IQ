@@ -5,6 +5,13 @@ python-multipart==0.0.26
 python-dotenv==1.1.1
 pydantic==2.12.5
 
+# storage + queue
+sqlalchemy==2.1.8
+psycopg[binary]==3.3.8
+alembic==1.20.1
+redis==8.1.0
+rq==3.0.0
+
 # llm
 langchain-core==1.2.28
 langchain-groq==1.1.2

@@ -1,15 +1,64 @@
 services:
-  backend:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: insightiq
+      POSTGRES_PASSWORD: insightiq
+      POSTGRES_DB: insightiq
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U insightiq"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
     build: ./backend
     ports:
       - "8000:8000"
     env_file:
-      - backend/.env
-    environment:
-      - UPLOAD_DIR=/data/uploads
-      - ALLOWED_ORIGINS=http://localhost:8080
+      - path: backend/.env
+        required: false
+    environment: &backend-env
+      UPLOAD_DIR: /data/uploads
+      DATABASE_URL: postgresql://insightiq:insightiq@postgres:5432/insightiq
+      REDIS_URL: redis://redis:6379/0
+      ALLOWED_ORIGINS: http://localhost:8080
     volumes:
-      - insightiq_data:/data
+      - datasets:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # parses uploads off the request path; shares the dataset volume with the api
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - path: backend/.env
+        required: false
+    environment: *backend-env
+    volumes:
+      - datasets:/data
+    depends_on:
+      api:
+        condition: service_healthy   # migrations have run
 
   frontend:
     build:
@@ -19,7 +68,8 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - backend
+      - api
 
 volumes:
-  insightiq_data:
+  pgdata:
+  datasets:

@@ -4,10 +4,14 @@
   <p><b>Talk to your data. Get instant answers.</b></p>
   <p><a href="https://insightiq-web.fly.dev"><b>Live demo</b></a> · <a href="https://insightiq-api.fly.dev/health">API</a></p>
 
+  [![CI](https://github.com/dishant9210/insight-IQ/actions/workflows/ci.yml/badge.svg)](https://github.com/dishant9210/insight-IQ/actions/workflows/ci.yml)
+
   ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
   ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
   ![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&logo=duckdb&logoColor=black)
   ![Groq](https://img.shields.io/badge/Groq-f55036?style=for-the-badge)
+  ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)
+  ![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
   ![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)
 
   <p>
@@ -50,14 +54,33 @@ LLM output is treated as untrusted input. See [Security](#-security).
 ## 🔁 How it works
 
 ```
-upload ──▶ loader (csv / excel / json / parquet) ──▶ one .duckdb file per dataset
-                                                              │
-question ──▶ schema + sample rows ──▶ LLM (Groq) ──▶ SQL ──▶ guard ──▶ DuckDB (read-only) ──▶ result
-                                                                                        │
-                                                                        LLM (Groq) ──▶ insight
+             ┌──────────┐  202 + dataset_id   ┌──────────┐
+ upload ───▶ │   api    │ ──── enqueue ─────▶ │  Redis   │
+             └────┬─────┘                     └────┬─────┘
+                  │ poll status                    ▼
+                  │                          ┌──────────┐  loader (csv / excel / json / parquet)
+                  │                          │  worker  │ ─▶ one .duckdb file per dataset
+                  ▼                          └────┬─────┘
+             ┌──────────┐ ◀── status, schema ─────┘
+             │ Postgres │      datasets + query_log
+             └──────────┘
+
+ question ──▶ api ──▶ schema + sample rows ──▶ LLM (Groq) ──▶ SQL ──▶ guard ──▶ DuckDB (read-only) ──▶ result
+                                                                                              │
+                                                                               LLM (Groq) ──▶ insight
 ```
 
-1. **Upload** — the file is streamed to disk (size-capped), parsed by the matching loader, and written into its own DuckDB database. Metadata (columns, detected types, preview) is saved alongside it, so datasets survive a restart.
+| Service | Role |
+| :--- | :--- |
+| **api** | FastAPI. Accepts uploads, answers questions, serves dataset status. Runs migrations on start. |
+| **worker** | Same image, `python -m app.worker`. Parses uploads off the request path, so a big workbook never holds a request open. |
+| **Postgres** | Dataset metadata and status, plus a log of every question with its SQL, outcome and latency. |
+| **Redis** | The ingest queue ([RQ](https://python-rq.org)). |
+| **frontend** | React build behind nginx. |
+
+Without `REDIS_URL` the api parses uploads itself, and without `DATABASE_URL` it uses a SQLite file, so a single container still runs the whole app.
+
+1. **Upload** — the file is streamed to disk (size-capped) and the api answers `202` straight away. The worker parses it with the matching loader and writes it into its own DuckDB database; the dataset row in Postgres goes `pending → processing → ready` (or `failed` with the reason). The frontend polls until it's ready.
 2. **Query** — the schema and a few sample rows go to the model with the question. The returned SQL is cleaned and validated, then run with a row limit and a timeout.
 3. **Insight** — the first few result rows go back to the model for a short written summary. If the query returned nothing, this step is skipped.
 
@@ -82,10 +105,11 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | Layer | Technology |
 | :--- | :--- |
 | **Frontend** | React 19, Vite, Tailwind CSS |
-| **Backend** | FastAPI, Pydantic, LangChain |
-| **Database** | DuckDB, pandas, pyarrow |
+| **Backend** | FastAPI, Pydantic, LangChain, SQLAlchemy, Alembic |
+| **Data** | PostgreSQL (metadata), DuckDB (queries), pandas, pyarrow |
+| **Queue** | Redis + RQ worker |
 | **AI/LLM** | Groq (GPT-OSS 120B by default, any Groq model via `GROQ_MODEL`) |
-| **Infrastructure** | Docker, Docker Compose |
+| **Infrastructure** | Docker, Docker Compose, GitHub Actions, Fly.io |
 
 ---
 
@@ -110,7 +134,9 @@ cp frontend/.env.example frontend/.env
 | `GROQ_API_KEY` | — | required |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | any model your Groq key can use |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,...` | comma separated |
-| `UPLOAD_DIR` | `uploads` | datasets + metadata live here |
+| `UPLOAD_DIR` | `uploads` | DuckDB files live here |
+| `DATABASE_URL` | SQLite in `UPLOAD_DIR` | `postgresql://...` in compose |
+| `REDIS_URL` | — | set it to parse uploads on the worker |
 | `MAX_UPLOAD_MB` | `50` | |
 | `MAX_RESULT_ROWS` | `1000` | |
 | `QUERY_TIMEOUT_SECONDS` | `20` | |
@@ -120,6 +146,7 @@ cp frontend/.env.example frontend/.env
 ```bash
 docker compose up --build
 ```
+Starts Postgres, Redis, the api, the worker and the frontend.
 
 ### …or run locally
 ```bash
@@ -127,6 +154,7 @@ docker compose up --build
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+alembic upgrade head          # SQLite by default, or set DATABASE_URL
 uvicorn app.main:app --reload
 
 # frontend (new terminal)
@@ -136,6 +164,14 @@ npm run dev
 ```
 
 Local dev: http://localhost:5173 · API docs: http://localhost:8000/docs · Docker Compose: http://localhost:8080
+
+### Tests
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+The suite runs the real Alembic migrations, uses fakeredis for the queue, and stubs the LLM, so it needs no API key. CI runs it against both SQLite and Postgres, lints and builds the frontend, then boots the full compose stack and pushes an upload through the worker.
 
 ---
 
@@ -167,7 +203,7 @@ fly secrets set ALLOWED_ORIGINS=https://insightiq-web.fly.dev -a insightiq-api
 Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_API_URL`.
 
 ### Docker Compose (self-hosted)
-`docker compose up --build` builds both images — the frontend as an nginx-served static bundle, the backend with a named volume for data — and serves the app on http://localhost:8080.
+`docker compose up --build` runs the full stack (Postgres, Redis, api, worker, frontend) and serves the app on http://localhost:8080. Any VM with Docker can host it this way.
 
 ---
 
@@ -175,16 +211,20 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `POST` | `/api/upload` | multipart file → `dataset_id`, columns, detected types, preview, warnings |
-| `GET` | `/api/datasets/{id}` | metadata for an uploaded dataset |
+| `POST` | `/api/upload` | multipart file → `202` with `dataset_id` and `status` when a worker is running, else `200` with the parsed dataset |
+| `GET` | `/api/datasets/{id}` | status (`pending` / `processing` / `ready` / `failed`), columns, tables, preview, warnings |
 | `POST` | `/api/query` | `{ dataset_id, question }` → `sql`, `result`, `insight`, `chart_type`, `truncated` |
 | `GET` | `/health` | liveness |
+| `GET` | `/ready` | readiness — database and Redis reachable |
 
 ---
 
 ## 🗺 Roadmap
 - [ ] Charts in the UI (`chart_type` is already returned)
 - [ ] Follow-up questions that remember the previous query
-- [ ] Rate limiting
-- [ ] Tests + CI
+- [x] Postgres + Redis queue + ingestion worker
+- [x] Tests + CI
+- [ ] Rate limiting and answer caching (Redis)
+- [ ] Few-shot retrieval from past queries (pgvector)
+- [ ] Metrics and dashboards (Prometheus, Grafana)
 - [x] Hosted demo
