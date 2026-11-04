@@ -91,35 +91,62 @@ async def save_and_parse(file: UploadFile) -> dict:
     await _write_upload(file, raw_path)
 
     try:
-        result = get_loader(file.filename).load(raw_path)
+        results = get_loader(file.filename).load_all(raw_path)
 
         # Every format ends up as one DuckDB file so queries can open it read-only.
+        # Workbooks get one table per sheet; "data" always points at the first one.
         db = duckdb.connect(_db_path(dataset_id))
         try:
             if ext == ".parquet":
                 db.execute("CREATE TABLE data AS SELECT * FROM read_parquet(?)", [raw_path])
             else:
-                db.register("df", result.df)
-                db.execute("CREATE TABLE data AS SELECT * FROM df")
+                for r in results:
+                    db.register("df", r.df)
+                    db.execute(f'CREATE TABLE "{r.name}" AS SELECT * FROM df')
+                    db.unregister("df")
+                if results[0].name != "data":
+                    db.execute(f'CREATE VIEW data AS SELECT * FROM "{results[0].name}"')
         finally:
             db.close()
     finally:
         if os.path.exists(raw_path):
             os.remove(raw_path)
 
+    first = results[0]
+    tables = [{
+        "name": r.name,
+        "sheet": r.sheet,
+        "rows": r.row_count,
+        "columns": r.df.columns.tolist(),
+        "detected_types": r.detected_types,
+        "preview": _records(r.df.head(5)),
+    } for r in results]
+
     meta = {
         "dataset_id": dataset_id,
         "filename": file.filename,
-        "rows": result.row_count,
-        "columns": result.df.columns.tolist(),
-        "detected_types": result.detected_types,
-        "preview": _records(result.df.head(5)),
-        "warnings": result.warnings,
+        "rows": first.row_count,
+        "columns": first.df.columns.tolist(),
+        "detected_types": first.detected_types,
+        "preview": tables[0]["preview"],
+        "warnings": [w for r in results for w in r.warnings],
+        "tables": tables,
     }
     with open(_meta_path(dataset_id), "w") as f:
         json.dump(meta, f)
     _datasets[dataset_id] = meta
     return meta
+
+def tables_of(meta: dict) -> list[dict]:
+    """Table list for a dataset. Datasets saved before multi-sheet support only have 'data'."""
+    return meta.get("tables") or [{
+        "name": "data",
+        "sheet": None,
+        "rows": meta["rows"],
+        "columns": meta["columns"],
+        "detected_types": meta["detected_types"],
+        "preview": meta["preview"],
+    }]
 
 def execute_query(dataset_id: str, sql: str) -> tuple[list[dict], bool]:
     """Run an already-validated SELECT against a dataset. Returns (rows, truncated)."""

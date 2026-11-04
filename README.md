@@ -36,6 +36,9 @@ Ask questions like *"Who are my top 10 customers by revenue?"* or *"Show me the 
 ### 📂 **Any tabular file**
 CSV, Excel (`.xlsx`/`.xls`), JSON and Parquet. Column names are normalised, dates are detected, nested JSON is flattened one level, and non-UTF-8 CSVs fall back to latin-1 — with a warning so you know what happened.
 
+### 📑 **Multi-sheet workbooks**
+Every non-empty sheet in an Excel file becomes its own table (`Customer List` → `customer_list`), and the model sees all of them, so a question like *"revenue by customer city"* can JOIN the orders sheet to the customers sheet. `data` always points at the first sheet; empty sheets are skipped with a warning.
+
 ### ⚡ **Fast**
 Groq inference plus DuckDB's columnar engine means most questions come back in a second or two, even on a few hundred thousand rows.
 

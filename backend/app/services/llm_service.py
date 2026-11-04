@@ -20,19 +20,16 @@ llm = ChatGroq(
 
 SQL_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a SQL expert. Given a dataset schema and a question,
-write a single DuckDB SQL query on a table called 'data'.
+write a single DuckDB SQL query against the tables below.
 
 Rules:
 - Return ONLY the SQL query, no explanation, no markdown fences
 - Only SELECT statements — no INSERT, UPDATE, DELETE, DROP
-- Column names must match the schema exactly
+- Table and column names must match the schema exactly
+- If the answer needs columns from more than one table, JOIN them on a shared key
 - Use DuckDB syntax (e.g. STRFTIME for dates)
 
-Schema:
 {schema}
-
-Sample rows:
-{sample}
 """),
     ("human", "{question}")
 ])
@@ -42,9 +39,18 @@ INSIGHT_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "Question: {question}\nResults: {results}")
 ])
 
-def _schema_str(columns: list[str], dtypes: dict) -> str:
-    cols = "\n".join(f"  {col} ({dtypes.get(col, 'unknown')})" for col in columns)
-    return f"Columns:\n{cols}"
+def _schema_str(tables: list[dict]) -> str:
+    parts = []
+    for t in tables:
+        dtypes = t["detected_types"]
+        cols = "\n".join(f"  {col} ({dtypes.get(col, 'unknown')})" for col in t["columns"])
+        label = f" (sheet '{t['sheet']}')" if t.get("sheet") else ""
+        parts.append(
+            f"Table {t['name']}{label}, {t['rows']} rows\n"
+            f"Columns:\n{cols}\n"
+            f"Sample rows: {t['preview'][:3]}"
+        )
+    return "\n\n".join(parts)
 
 sql_chain = SQL_PROMPT | llm | StrOutputParser()
 insight_chain = INSIGHT_PROMPT | llm | StrOutputParser()
@@ -62,16 +68,13 @@ async def _ask(chain, inputs: dict) -> str:
 async def answer_question(
     question: str,
     dataset_id: str,
-    columns: list[str],
-    dtypes: dict,
-    sample: list[dict]
+    tables: list[dict],
 ) -> dict:
-    schema = _schema_str(columns, dtypes)
+    schema = _schema_str(tables)
 
     # Step 1: Generate SQL
     raw_sql = await _ask(sql_chain, {
         "schema": schema,
-        "sample": str(sample[:3]),
         "question": question
     })
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.models.schemas import QueryRequest, QueryResponse
 from app.services.llm_service import answer_question
-from app.services.dataset_service import get_dataset
+from app.services.dataset_service import get_dataset, tables_of
 
 router = APIRouter(prefix="/api", tags=["query"])
 
@@ -12,8 +12,6 @@ async def query_dataset(req: QueryRequest):
     result = await answer_question(
         question=req.question,
         dataset_id=req.dataset_id,
-        columns=meta["columns"],
-        dtypes=meta["detected_types"],
-        sample=meta["preview"],
+        tables=tables_of(meta),
     )
     return QueryResponse(question=req.question, **result)

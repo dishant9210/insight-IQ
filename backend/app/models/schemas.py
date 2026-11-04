@@ -14,6 +14,14 @@ class QueryResponse(BaseModel):
     chart_type: str  # "bar" | "line" | "pie" | "table"
     truncated: bool = False
 
+class TableInfo(BaseModel):
+    name: str                      # table name to use in SQL
+    sheet: Optional[str] = None    # original Excel sheet name
+    rows: int
+    columns: list[str]
+    detected_types: dict[str, str] = {}
+    preview: list[dict[str, Any]] = []
+
 class UploadResponse(BaseModel):
     dataset_id: str
     filename: str
@@ -22,3 +30,4 @@ class UploadResponse(BaseModel):
     preview: list[dict[str, Any]]  # first 5 rows
     warnings: list[str] = []
     detected_types: dict[str, str] = {}
+    tables: list[TableInfo] = []   # one per sheet for workbooks, else a single "data"

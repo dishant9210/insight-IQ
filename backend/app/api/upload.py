@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from app.services.dataset_service import save_and_parse, get_dataset
+from app.services.dataset_service import save_and_parse, get_dataset, tables_of
 from app.models.schemas import UploadResponse
 
 router = APIRouter(prefix="/api", tags=["datasets"])
@@ -14,8 +14,8 @@ async def upload_dataset(file: UploadFile = File(...)):
     if ext not in SUPPORTED:
         raise HTTPException(400, f"Unsupported: {ext}. Use: {sorted(SUPPORTED)}")
     try:
-        result = await save_and_parse(file)
-        return UploadResponse(**result)
+        meta = await save_and_parse(file)
+        return UploadResponse(**{**meta, "tables": tables_of(meta)})
     except HTTPException:
         raise
     except Exception as e:
@@ -23,4 +23,5 @@ async def upload_dataset(file: UploadFile = File(...)):
 
 @router.get("/datasets/{dataset_id}", response_model=UploadResponse)
 async def dataset_info(dataset_id: str):
-    return UploadResponse(**get_dataset(dataset_id))
+    meta = get_dataset(dataset_id)
+    return UploadResponse(**{**meta, "tables": tables_of(meta)})

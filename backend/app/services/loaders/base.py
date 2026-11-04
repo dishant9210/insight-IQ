@@ -9,6 +9,8 @@ class LoadResult:
     warnings: list[str]               # e.g. "3 rows had unparseable dates"
     row_count: int
     col_count: int
+    name: str = "data"                # table name in DuckDB
+    sheet: str | None = None          # original sheet name (Excel only)
 
 class BaseLoader(ABC):
     MAX_ROWS = 500_000   # safety limit — raise HTTPException above this
@@ -17,6 +19,10 @@ class BaseLoader(ABC):
     def load(self, file_path: str) -> LoadResult:
         """Parse the file and return a normalised LoadResult."""
         ...
+
+    def load_all(self, file_path: str) -> list[LoadResult]:
+        """One result per table. Only multi-sheet formats return more than one."""
+        return [self.load(file_path)]
 
     def _infer_types(self, df: pd.DataFrame) -> dict[str, str]:
         """Classify each column for the schema prompt and chart hints."""

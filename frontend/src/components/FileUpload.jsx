@@ -43,10 +43,28 @@ const FileUpload = ({ onUploadSuccess }) => {
 
       {uploaded && !error && (
         <div className="text-sm text-slate-600 text-left">
-          <p>
-            <span className="font-medium text-slate-800">{uploaded.filename}</span>
-            {' — '}{uploaded.rows.toLocaleString()} rows, {uploaded.columns.length} columns
-          </p>
+          {uploaded.tables?.length > 1 ? (
+            <>
+              <p>
+                <span className="font-medium text-slate-800">{uploaded.filename}</span>
+                {' — '}{uploaded.tables.length} sheets, ask across any of them
+              </p>
+              <ul className="mt-2 space-y-1">
+                {uploaded.tables.map((t) => (
+                  <li key={t.name} className="flex flex-wrap items-baseline gap-x-2">
+                    <code className="text-blue-700">{t.name}</code>
+                    {t.sheet && t.sheet !== t.name && <span className="text-slate-400">({t.sheet})</span>}
+                    <span>{t.rows.toLocaleString()} rows · {t.columns.join(', ')}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p>
+              <span className="font-medium text-slate-800">{uploaded.filename}</span>
+              {' — '}{uploaded.rows.toLocaleString()} rows, {uploaded.columns.length} columns
+            </p>
+          )}
           {uploaded.warnings?.length > 0 && (
             <ul className="mt-1 text-amber-700 list-disc list-inside">
               {uploaded.warnings.map((w, i) => <li key={i}>{w}</li>)}
