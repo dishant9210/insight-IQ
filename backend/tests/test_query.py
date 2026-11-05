@@ -61,3 +61,9 @@ def test_missing_groq_key_is_a_clear_503(client, sales, monkeypatch):
     monkeypatch.setattr(llm_service, "insight_chain", None)
     r = ask(client, sales["dataset_id"])
     assert r.status_code == 503 and "GROQ_API_KEY" in r.json()["detail"]
+
+def test_prompt_names_the_table_explicitly(client, sales, fake_llm):
+    # "Table data, 30 rows" read as prose made the model invent FROM orders
+    chain = fake_llm("SELECT 1")
+    ask(client, sales["dataset_id"])
+    assert "Table name: data," in chain.inputs["schema"]

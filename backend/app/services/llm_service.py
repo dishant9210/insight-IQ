@@ -20,7 +20,8 @@ write a single DuckDB SQL query against the tables below.
 Rules:
 - Return ONLY the SQL query, no explanation, no markdown fences
 - Only SELECT statements — no INSERT, UPDATE, DELETE, DROP
-- Table and column names must match the schema exactly
+- Table and column names must match the schema exactly; query only the tables
+  listed below (a single-table dataset is always the table named data)
 - If the answer needs columns from more than one table, JOIN them on a shared key
 - Use DuckDB syntax (e.g. STRFTIME for dates)
 
@@ -41,7 +42,7 @@ def _schema_str(tables: list[dict]) -> str:
         cols = "\n".join(f"  {col} ({dtypes.get(col, 'unknown')})" for col in t["columns"])
         label = f" (sheet '{t['sheet']}')" if t.get("sheet") else ""
         parts.append(
-            f"Table {t['name']}{label}, {t['rows']} rows\n"
+            f"Table name: {t['name']}{label}, {t['rows']} rows\n"
             f"Columns:\n{cols}\n"
             f"Sample rows: {t['preview'][:3]}"
         )

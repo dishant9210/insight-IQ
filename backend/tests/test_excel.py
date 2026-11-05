@@ -37,8 +37,8 @@ def test_join_across_sheets(client, fake_llm):
     r = client.post("/api/query", json={"dataset_id": did, "question": "revenue by city"})
     assert r.status_code == 200, r.text
     assert r.json()["result"] == [{"city": "Pune", "total": 250}, {"city": "Delhi", "total": 150}]
-    assert "Table orders" in chain.inputs["schema"]
-    assert "Table customer_list (sheet 'Customer List')" in chain.inputs["schema"]
+    assert "Table name: orders" in chain.inputs["schema"]
+    assert "Table name: customer_list (sheet 'Customer List')" in chain.inputs["schema"]
 
 def test_data_alias_points_at_first_sheet(client, fake_llm):
     did = upload(client, "book.xlsx", BOOK).json()["dataset_id"]
