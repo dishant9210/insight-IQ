@@ -46,6 +46,9 @@ Every non-empty sheet in an Excel file becomes its own table (`Customer List` �
 ### ⚡ **Fast**
 Groq inference plus DuckDB's columnar engine means most questions come back in a second or two, even on a few hundred thousand rows.
 
+### ♻️ **Cached and rate-limited**
+Asking the same question about the same file again returns the stored answer with no model call (and a *Cached* badge in the UI). Each client gets a per-minute and per-day budget of questions and uploads, so one visitor can't burn through the Groq quota.
+
 ### 🔒 **Safe by construction**
 LLM output is treated as untrusted input. See [Security](#-security).
 
@@ -65,7 +68,10 @@ LLM output is treated as untrusted input. See [Security](#-security).
              │ Postgres │      datasets + query_log
              └──────────┘
 
- question ──▶ api ──▶ schema + sample rows ──▶ LLM (Groq) ──▶ SQL ──▶ guard ──▶ DuckDB (read-only) ──▶ result
+ question ──▶ rate limit ──▶ answer cache ──hit──▶ result
+                               │ miss
+                               ▼
+              api ──▶ schema + sample rows ──▶ LLM (Groq) ──▶ SQL ──▶ guard ──▶ DuckDB (read-only) ──▶ result
                                                                                               │
                                                                                LLM (Groq) ──▶ insight
 ```
@@ -75,14 +81,15 @@ LLM output is treated as untrusted input. See [Security](#-security).
 | **api** | FastAPI. Accepts uploads, answers questions, serves dataset status. Runs migrations on start. |
 | **worker** | Same image, `python -m app.worker`. Parses uploads off the request path, so a big workbook never holds a request open. |
 | **Postgres** | Dataset metadata and status, plus a log of every question with its SQL, outcome and latency. |
-| **Redis** | The ingest queue ([RQ](https://python-rq.org)). |
+| **Redis** | The ingest queue ([RQ](https://python-rq.org)), the answer cache and the rate-limit counters — shared by every api replica. |
 | **frontend** | React build behind nginx. |
 
-Without `REDIS_URL` the api parses uploads itself, and without `DATABASE_URL` it uses a SQLite file, so a single container still runs the whole app.
+Without `REDIS_URL` the api parses uploads itself and keeps the cache and rate-limit counters in memory, and without `DATABASE_URL` it uses a SQLite file, so a single container still runs the whole app.
 
 1. **Upload** — the file is streamed to disk (size-capped) and the api answers `202` straight away. The worker parses it with the matching loader and writes it into its own DuckDB database; the dataset row in Postgres goes `pending → processing → ready` (or `failed` with the reason). The frontend polls until it's ready.
 2. **Query** — the schema and a few sample rows go to the model with the question. The returned SQL is cleaned and validated, then run with a row limit and a timeout.
 3. **Insight** — the first few result rows go back to the model for a short written summary. If the query returned nothing, this step is skipped.
+4. **Cache** — the answer is stored under the dataset id and the normalised question (case, spacing and a trailing `?` don't matter) for `ANSWER_CACHE_TTL_SECONDS`. Datasets never change after upload, so a cached answer can't go stale. Failed questions aren't cached.
 
 ---
 
@@ -97,6 +104,7 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | **Read-only connection** | Each query opens the dataset's `.duckdb` file with `read_only=True`. |
 | **No external access** | `SET enable_external_access = false` — so `SELECT * FROM read_csv_auto('/etc/passwd')` is a permission error, not a data leak. `lock_configuration = true` stops the query flipping it back. |
 | **Limits** | Results are capped (`MAX_RESULT_ROWS`), queries are interrupted after `QUERY_TIMEOUT_SECONDS`, uploads are rejected above `MAX_UPLOAD_MB`. |
+| **Rate limits** | Fixed windows per client IP (`RATE_LIMIT_QUERY`, `RATE_LIMIT_UPLOAD`). Over the limit is a `429` with `Retry-After`; every response carries `X-RateLimit-Limit` / `-Remaining` / `-Reset`. If Redis is unreachable the limiter fails open rather than taking the api down. |
 
 ---
 
@@ -140,6 +148,10 @@ cp frontend/.env.example frontend/.env
 | `MAX_UPLOAD_MB` | `50` | |
 | `MAX_RESULT_ROWS` | `1000` | |
 | `QUERY_TIMEOUT_SECONDS` | `20` | |
+| `ANSWER_CACHE_TTL_SECONDS` | `3600` | `0` turns the cache off |
+| `RATE_LIMIT_QUERY` | `20/minute,200/day` | per client; `second` / `minute` / `hour` / `day`, empty = off |
+| `RATE_LIMIT_UPLOAD` | `10/minute,100/day` | |
+| `CLIENT_IP_HEADER` | — | header a trusted proxy sets with the real client IP (`Fly-Client-IP` on Fly) |
 | `VITE_API_URL` (frontend) | `http://localhost:8000` | |
 
 ### 3. Run with Docker
@@ -213,9 +225,9 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 | :--- | :--- | :--- |
 | `POST` | `/api/upload` | multipart file → `202` with `dataset_id` and `status` when a worker is running, else `200` with the parsed dataset |
 | `GET` | `/api/datasets/{id}` | status (`pending` / `processing` / `ready` / `failed`), columns, tables, preview, warnings |
-| `POST` | `/api/query` | `{ dataset_id, question }` → `sql`, `result`, `insight`, `chart_type`, `truncated` |
+| `POST` | `/api/query` | `{ dataset_id, question }` → `sql`, `result`, `insight`, `chart_type`, `truncated`, `cached` |
 | `GET` | `/health` | liveness |
-| `GET` | `/ready` | readiness — database and Redis reachable |
+| `GET` | `/ready` | readiness — database, queue and cache reachable |
 
 ---
 
@@ -224,7 +236,7 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 - [ ] Follow-up questions that remember the previous query
 - [x] Postgres + Redis queue + ingestion worker
 - [x] Tests + CI
-- [ ] Rate limiting and answer caching (Redis)
+- [x] Rate limiting and answer caching (Redis)
 - [ ] Few-shot retrieval from past queries (pgvector)
 - [ ] Metrics and dashboards (Prometheus, Grafana)
 - [x] Hosted demo

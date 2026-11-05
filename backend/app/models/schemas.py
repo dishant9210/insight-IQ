@@ -13,6 +13,7 @@ class QueryResponse(BaseModel):
     insight: str
     chart_type: str  # "bar" | "line" | "pie" | "table"
     truncated: bool = False
+    cached: bool = False           # served from the answer cache, no LLM call
 
 class TableInfo(BaseModel):
     name: str                      # table name to use in SQL

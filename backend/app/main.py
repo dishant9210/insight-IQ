@@ -11,6 +11,7 @@ from app.api.upload import router as upload_router
 from app.api.query import router as query_router
 from app.db import engine
 from app.queue import get_queue
+from app.store import get_store
 
 origins = [
     o.strip()
@@ -21,7 +22,7 @@ origins = [
 app = FastAPI(
     title="InsightIQ",
     description="Natural language analytics",
-    version="0.3.0"
+    version="0.4.0"
 )
 
 app.add_middleware(
@@ -30,6 +31,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # let the browser read the limit headers on cross-origin responses
+    expose_headers=["Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
 @app.get("/health")
@@ -38,7 +41,7 @@ async def health():
 
 @app.get("/ready")
 def ready():
-    """Readiness: can we reach the database, and Redis if one is configured?"""
+    """Readiness: can we reach the database, and Redis (queue + cache) if one is configured?"""
     checks = {}
     try:
         with engine.connect() as conn:
@@ -56,6 +59,13 @@ def ready():
             checks["queue"] = "ok"
         except Exception as e:
             checks["queue"] = f"error: {e.__class__.__name__}"
+
+    store = get_store()
+    try:
+        store.ping()
+        checks["cache"] = "ok" if store.name == "redis" else "disabled (in-process memory)"
+    except Exception as e:
+        checks["cache"] = f"error: {e.__class__.__name__}"
 
     healthy = all(v == "ok" or v.startswith("disabled") for v in checks.values())
     return JSONResponse(checks, status_code=200 if healthy else 503)

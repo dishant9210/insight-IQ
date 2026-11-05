@@ -72,7 +72,9 @@ jobs:
       - name: upload goes through the worker
         run: |
           set -euo pipefail
-          curl -sf http://localhost:8000/ready | tee /dev/stderr | grep -q '"queue":"ok"'
+          ready=$(curl -sf http://localhost:8000/ready); echo "$ready"
+          echo "$ready" | grep -q '"queue":"ok"'
+          echo "$ready" | grep -q '"cache":"ok"'
           resp=$(curl -s -w '\n%{http_code}' -F "file=@samples/sales.csv" http://localhost:8000/api/upload)
           code=$(echo "$resp" | tail -1)
           id=$(echo "$resp" | head -1 | python3 -c "import sys,json; print(json.load(sys.stdin)['dataset_id'])")
@@ -87,6 +89,14 @@ jobs:
           done
           test "$status" = ready
           curl -sf http://localhost:8080 | grep -q "<title>InsightIQ</title>"
+      - name: rate limit is shared through redis
+        run: |
+          set -euo pipefail
+          # uploads are capped at 10/minute per client; one is already spent above
+          codes=$(for i in $(seq 1 10); do curl -s -o /dev/null -w '%{http_code} ' -F "file=@samples/sales.csv" http://localhost:8000/api/upload; done)
+          echo "$codes"
+          echo "$codes" | grep -q 429
+          docker compose exec -T redis redis-cli --scan --pattern 'iq:rl:upload:*' | grep -q .
       - name: logs
         if: failure()
         run: |

@@ -3,6 +3,7 @@ const ResultsTable = ({ queryData }) => {
   const insight = queryData?.insight || "";
   const sql = queryData?.sql || "";
   const truncated = queryData?.truncated || false;
+  const cached = queryData?.cached || false;
 
   if (!queryData) return null;
 
@@ -14,7 +15,17 @@ const ResultsTable = ({ queryData }) => {
       {/* LLM Insight Section */}
       {insight && (
         <div className="bg-white p-6 rounded-xl border border-blue-100 shadow-sm border-l-4 border-l-blue-500">
-          <h4 className="text-xs font-bold uppercase tracking-widest text-blue-500 mb-2">AI Insight</h4>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-xs font-bold uppercase tracking-widest text-blue-500">AI Insight</h4>
+            {cached && (
+              <span
+                className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5"
+                title="Answered from cache: this question was asked before, so no new model call was made"
+              >
+                Cached
+              </span>
+            )}
+          </div>
           <p className="text-slate-700 leading-relaxed italic">"{insight}"</p>
         </div>
       )}

@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timezone
-from sqlalchemy import create_engine, String, Integer, Text, DateTime, JSON
+from sqlalchemy import create_engine, String, Integer, Text, DateTime, JSON, Boolean, false as sa_false
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
@@ -62,4 +62,5 @@ class QueryLog(Base):
     error: Mapped[str | None] = mapped_column(Text)
     row_count: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int] = mapped_column(Integer)
+    cached: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

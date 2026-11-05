@@ -18,6 +18,7 @@ from sqlalchemy import delete
 from app.db import SessionLocal, Dataset, QueryLog
 from app.main import app
 from app.services import llm_service
+from app import store
 
 BACKEND = os.path.dirname(os.path.dirname(__file__))
 
@@ -36,6 +37,13 @@ def clean_db():
         s.execute(delete(QueryLog))
         s.execute(delete(Dataset))
         s.commit()
+
+@pytest.fixture(autouse=True)
+def fresh_store(monkeypatch):
+    # every test gets an empty cache and fresh rate-limit counters
+    s = store.MemoryStore()
+    monkeypatch.setattr(store, "_store", s)
+    return s
 
 @pytest.fixture
 def client():
@@ -76,3 +84,11 @@ def sales(client):
     r = upload(client, "sales.csv", SALES_CSV, "text/csv")
     assert r.status_code == 200, r.text
     return r.json()
+
+@pytest.fixture
+def upload_sales(client):
+    def go():
+        r = upload(client, "sales.csv", SALES_CSV, "text/csv")
+        assert r.status_code == 200, r.text
+        return r.json()
+    return go

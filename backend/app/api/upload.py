@@ -1,7 +1,8 @@
 import asyncio
-from fastapi import APIRouter, UploadFile, File, HTTPException, Response
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Response
 from app.services.dataset_service import save_upload, ingest, get_dataset, tables_of
 from app.models.schemas import UploadResponse
+from app.services.rate_limit import limit
 
 router = APIRouter(prefix="/api", tags=["datasets"])
 
@@ -12,7 +13,7 @@ def _response(meta: dict) -> UploadResponse:
         return UploadResponse(**meta)
     return UploadResponse(**{**meta, "tables": tables_of(meta)})
 
-@router.post("/upload", response_model=UploadResponse)
+@router.post("/upload", response_model=UploadResponse, dependencies=[Depends(limit("upload"))])
 async def upload_dataset(response: Response, file: UploadFile = File(...)):
     if "." not in file.filename:
         raise HTTPException(400, f"File needs an extension. Use: {sorted(SUPPORTED)}")

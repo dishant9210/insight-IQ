@@ -9,6 +9,8 @@ primary_region = "sin"
   MAX_RESULT_ROWS = "1000"
   QUERY_TIMEOUT_SECONDS = "20"
   DATASET_TTL_HOURS = "24"
+  # Fly's proxy sets this to the real client IP (and overwrites any client value)
+  CLIENT_IP_HEADER = "Fly-Client-IP"
   # set after the frontend is deployed:
   #   fly secrets set ALLOWED_ORIGINS=https://<your-app>.vercel.app
   # and the model key:
