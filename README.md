@@ -4,7 +4,7 @@
   <p><b>Talk to your data. Get instant answers.</b></p>
   <p><a href="https://insightiq-web.fly.dev"><b>Live demo</b></a> · <a href="https://insightiq-api.fly.dev/health">API</a></p>
 
-  [![CI](https://github.com/dishant9210/insight-IQ/actions/workflows/ci.yml/badge.svg)](https://github.com/dishant9210/insight-IQ/actions/workflows/ci.yml)
+  [![CI](https://github.com/dishant9210/insight-IQ/actions/workflows/ci.yml/badge.svg)](https://github.com/dishant9210/insight-IQ/actions/workflows/ci.yml) [![Eval](https://github.com/dishant9210/insight-IQ/actions/workflows/eval.yml/badge.svg)](https://github.com/dishant9210/insight-IQ/actions/workflows/eval.yml)
 
   ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
   ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
@@ -97,6 +97,30 @@ Without `REDIS_URL` the api parses uploads itself and keeps the cache and rate-l
 3. **Query** — the schema (with any column notes), a few sample rows and the examples go to the model with the question. The returned SQL is cleaned and validated, then run with a row limit and a timeout.
 4. **Insight** — the first few result rows go back to the model for a short written summary. If the query returned nothing, this step is skipped.
 5. **Cache** — the answer is stored under the dataset id and the normalised question (case, spacing and a trailing `?` don't matter) for `ANSWER_CACHE_TTL_SECONDS`. Datasets never change after upload, so a cached answer can't go stale. Failed questions aren't cached, a thumbs-down evicts the answer, and editing the column notes changes the key.
+
+---
+
+## 📏 Evaluation
+
+`backend/evals` is a text-to-SQL eval set: 25 questions over three datasets — the sales CSV, a three-sheet workbook that needs JOINs, and a support-ticket log with deliberately cryptic headers (`st`, `pri`, `csat`) that only make sense with column notes. Each question has a gold query; a case passes when the model's SQL **returns the same result** as the gold query on the same data (column names, column order and extra columns don't matter; row order only does when the question asks for it).
+
+```bash
+cd backend
+python -m evals.run                    # all cases, exits 1 below EVAL_MIN_ACCURACY
+python -m evals.run --only join        # one tag or case id
+python -m evals.run --no-notes         # hide the column notes
+```
+
+Latest run, `openai/gpt-oss-120b`:
+
+| | aggregate | filter | date | ranking | join | notes | **total** |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| with column notes | 5/5 | 5/5 | 4/4 | 5/5 | 7/7 | 7/7 | **25/25** |
+| without notes (notes cases) | | | | | | 4/7 | |
+
+Without the notes the model guesses `st = 'C'` for *cancelled*, reads *open* as `closed IS NULL`, and takes `pri >= 3` for *high priority*. Putting back the old prompt that wrote `Table data` instead of `Table name: data` fails every single-table case with `FROM orders` — the regression that once reached the live site.
+
+The [Eval workflow](.github/workflows/eval.yml) runs this against the real model whenever the prompt, the SQL guard, the loaders or the eval set change, and weekly to catch drift on the provider's side; it gates at 90% and uploads the JSON report. The regular test suite checks the harness itself without a model: the scorer, that every gold query runs, and that no "which is the most…" question has a tie.
 
 ---
 
@@ -250,6 +274,6 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 - [x] Tests + CI
 - [x] Rate limiting and answer caching (Redis)
 - [x] Few-shot retrieval from past queries, column notes, schema selection (pgvector)
-- [ ] Text-to-SQL eval set in CI
+- [x] Text-to-SQL eval set in CI
 - [ ] Metrics and dashboards (Prometheus, Grafana)
 - [x] Hosted demo

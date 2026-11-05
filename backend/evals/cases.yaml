@@ -1,0 +1,217 @@
+# Text-to-SQL eval set. Each case is a question and a gold query; a case
+# passes when the model's SQL returns the same result as the gold query on the
+# same data (see scoring.py for what "same" means).
+#
+#   question   phrased so there's one right answer (say "after discount",
+#              "highest first" etc. — ambiguity isn't what we're measuring)
+#   gold       reference SQL; `gold` may be a list when there are several
+#              equally right result shapes (e.g. months as dates or 'YYYY-MM')
+#   ordered    true when the question asks for an order
+#   tags       for per-category accuracy in the report
+
+datasets:
+  sales:
+    file: sales.csv
+  store:
+    file: store.xlsx          # sheets: orders, customers, products
+  tickets:
+    file: tickets.csv         # cryptic headers on purpose — the notes explain them
+    notes:
+      data:
+        st: "ticket status: O = open, R = resolved, X = cancelled"
+        pri: "priority: 1 = urgent, 2 = high, 3 = normal, 4 = low"
+        csat: "customer satisfaction survey score from 1 (worst) to 5 (best); empty when no survey came back"
+        agt: "support agent who owns the ticket"
+        opened: "date the ticket was opened"
+        closed: "date the ticket was resolved; empty unless resolved"
+
+cases:
+  # --- single table: sales.csv ---------------------------------------------
+  - id: sales-order-count
+    dataset: sales
+    tags: [aggregate]
+    question: How many orders are there?
+    gold: SELECT COUNT(*) FROM data
+
+  - id: sales-units-by-category
+    dataset: sales
+    tags: [aggregate]
+    question: Total units sold in each category
+    gold: SELECT category, SUM(quantity) FROM data GROUP BY category
+
+  - id: sales-net-revenue-by-region
+    dataset: sales
+    tags: [aggregate]
+    question: Net revenue after discount for each region
+    gold: SELECT region, SUM(quantity * unit_price * (1 - discount)) FROM data GROUP BY region
+
+  - id: sales-top-product-units
+    dataset: sales
+    tags: [ranking]
+    question: Which single product sold the most units?
+    gold: SELECT product FROM data GROUP BY product ORDER BY SUM(quantity) DESC LIMIT 1
+
+  - id: sales-top3-customers-gross
+    dataset: sales
+    tags: [ranking]
+    ordered: true
+    question: Top 3 customers by gross revenue before discount, highest first
+    gold: |
+      SELECT customer, SUM(quantity * unit_price) AS gross
+      FROM data GROUP BY customer ORDER BY gross DESC LIMIT 3
+
+  - id: sales-orders-per-month
+    dataset: sales
+    tags: [date]
+    ordered: true
+    question: Number of orders in each month, in month order
+    gold:
+      - SELECT DATE_TRUNC('month', order_date) AS m, COUNT(*) FROM data GROUP BY m ORDER BY m
+      - SELECT STRFTIME(order_date, '%Y-%m') AS m, COUNT(*) FROM data GROUP BY m ORDER BY m
+
+  - id: sales-avg-discount-electronics
+    dataset: sales
+    tags: [filter]
+    question: What is the average discount on Electronics orders?
+    gold: SELECT AVG(discount) FROM data WHERE category = 'Electronics'
+
+  - id: sales-north-big-orders
+    dataset: sales
+    tags: [filter]
+    question: How many orders in the North region had more than 2 units?
+    gold: SELECT COUNT(*) FROM data WHERE region = 'North' AND quantity > 2
+
+  - id: sales-best-region-aov
+    dataset: sales
+    tags: [ranking]
+    question: Which region has the highest average order value after discount?
+    gold: |
+      SELECT region FROM data GROUP BY region
+      ORDER BY AVG(quantity * unit_price * (1 - discount)) DESC LIMIT 1
+
+  - id: sales-february-orders
+    dataset: sales
+    tags: [date, filter]
+    question: How many orders were placed in February 2024?
+    gold: SELECT COUNT(*) FROM data WHERE order_date >= '2024-02-01' AND order_date < '2024-03-01'
+
+  # --- workbook: joins across sheets ---------------------------------------
+  - id: store-qty-by-category
+    dataset: store
+    tags: [join]
+    question: Total quantity ordered per product category
+    gold: |
+      SELECT p.category, SUM(o.qty) FROM orders o
+      JOIN products p ON p.product_id = o.product_id GROUP BY p.category
+
+  - id: store-revenue-by-city
+    dataset: store
+    tags: [join]
+    question: Revenue (quantity times product price) by customer city
+    gold: |
+      SELECT c.city, SUM(o.qty * p.price) FROM orders o
+      JOIN customers c ON c.customer_id = o.customer_id
+      JOIN products p ON p.product_id = o.product_id
+      GROUP BY c.city
+
+  - id: store-top-customer
+    dataset: store
+    tags: [join, ranking]
+    question: Which customer spent the most in total (quantity times price)? Give their name.
+    gold: |
+      SELECT c.name FROM orders o
+      JOIN customers c ON c.customer_id = o.customer_id
+      JOIN products p ON p.product_id = o.product_id
+      GROUP BY c.name ORDER BY SUM(o.qty * p.price) DESC LIMIT 1
+
+  - id: store-wholesale-orders
+    dataset: store
+    tags: [join, filter]
+    question: How many orders came from Wholesale customers?
+    gold: |
+      SELECT COUNT(*) FROM orders o
+      JOIN customers c ON c.customer_id = o.customer_id WHERE c.segment = 'Wholesale'
+
+  - id: store-backpack-buyers
+    dataset: store
+    tags: [join]
+    question: How many different customers bought a Backpack?
+    gold: |
+      SELECT COUNT(DISTINCT o.customer_id) FROM orders o
+      JOIN products p ON p.product_id = o.product_id WHERE p.product = 'Backpack'
+
+  - id: store-aov-by-segment
+    dataset: store
+    tags: [join, aggregate]
+    question: Average order value (quantity times price) for each customer segment
+    gold: |
+      SELECT c.segment, AVG(o.qty * p.price) FROM orders o
+      JOIN customers c ON c.customer_id = o.customer_id
+      JOIN products p ON p.product_id = o.product_id
+      GROUP BY c.segment
+
+  - id: store-customers-per-city
+    dataset: store
+    tags: [aggregate]
+    question: How many customers are there in each city?
+    gold: SELECT city, COUNT(*) FROM customers GROUP BY city
+
+  - id: store-pune-monthly-revenue
+    dataset: store
+    tags: [join, date]
+    ordered: true
+    question: Monthly revenue (quantity times price) from customers in Pune, in month order
+    gold:
+      - |
+        SELECT DATE_TRUNC('month', o.order_date) AS m, SUM(o.qty * p.price) FROM orders o
+        JOIN customers c ON c.customer_id = o.customer_id
+        JOIN products p ON p.product_id = o.product_id
+        WHERE c.city = 'Pune' GROUP BY m ORDER BY m
+      - |
+        SELECT STRFTIME(o.order_date, '%Y-%m') AS m, SUM(o.qty * p.price) FROM orders o
+        JOIN customers c ON c.customer_id = o.customer_id
+        JOIN products p ON p.product_id = o.product_id
+        WHERE c.city = 'Pune' GROUP BY m ORDER BY m
+
+  # --- cryptic columns: needs the column notes -----------------------------
+  - id: tickets-open
+    dataset: tickets
+    tags: [notes]
+    question: How many tickets are still open?
+    gold: SELECT COUNT(*) FROM data WHERE st = 'O'
+
+  - id: tickets-cancelled
+    dataset: tickets
+    tags: [notes]
+    question: How many tickets were cancelled?
+    gold: SELECT COUNT(*) FROM data WHERE st = 'X'
+
+  - id: tickets-urgent-csat
+    dataset: tickets
+    tags: [notes]
+    question: Average satisfaction score for urgent tickets
+    gold: SELECT AVG(csat) FROM data WHERE pri = 1
+
+  - id: tickets-fewest-resolved
+    dataset: tickets
+    tags: [notes, ranking]
+    question: Which agent resolved the fewest tickets?
+    gold: SELECT agt FROM data WHERE st = 'R' GROUP BY agt ORDER BY COUNT(*) LIMIT 1
+
+  - id: tickets-days-to-resolve
+    dataset: tickets
+    tags: [notes, date]
+    question: Average number of days to resolve a ticket, for each priority level
+    gold: SELECT pri, AVG(DATE_DIFF('day', opened, closed)) FROM data WHERE st = 'R' GROUP BY pri
+
+  - id: tickets-survey-rate
+    dataset: tickets
+    tags: [notes]
+    question: What percentage (0 to 100) of resolved tickets got a satisfaction survey back?
+    gold: SELECT 100.0 * COUNT(csat) / COUNT(*) FROM data WHERE st = 'R'
+
+  - id: tickets-open-high-priority
+    dataset: tickets
+    tags: [notes, filter]
+    question: How many urgent or high priority tickets are still open?
+    gold: SELECT COUNT(*) FROM data WHERE st = 'O' AND pri IN (1, 2)

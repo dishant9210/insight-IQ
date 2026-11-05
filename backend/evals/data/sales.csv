@@ -1,0 +1,31 @@
+order_id,order_date,region,customer,product,category,quantity,unit_price,discount
+1001,2024-01-03,North,Acme Corp,Laptop,Electronics,2,899.00,0.05
+1002,2024-01-05,South,Globex,Office Chair,Furniture,4,149.50,0
+1003,2024-01-09,East,Initech,Monitor,Electronics,3,229.99,0.1
+1004,2024-01-14,West,Umbrella Inc,Desk,Furniture,1,399.00,0
+1005,2024-01-21,North,Acme Corp,Keyboard,Electronics,10,49.99,0.15
+1006,2024-02-02,South,Stark Industries,Laptop,Electronics,5,899.00,0.1
+1007,2024-02-06,East,Initech,Desk Lamp,Furniture,6,34.99,0
+1008,2024-02-11,West,Wayne Enterprises,Monitor,Electronics,2,229.99,0
+1009,2024-02-18,North,Globex,Office Chair,Furniture,8,149.50,0.05
+1010,2024-02-25,South,Acme Corp,Headphones,Electronics,12,79.00,0.2
+1011,2024-03-01,East,Stark Industries,Laptop,Electronics,3,899.00,0
+1012,2024-03-07,West,Initech,Keyboard,Electronics,15,49.99,0.1
+1013,2024-03-12,North,Wayne Enterprises,Desk,Furniture,2,399.00,0.05
+1014,2024-03-19,South,Umbrella Inc,Monitor,Electronics,4,229.99,0
+1015,2024-03-26,East,Globex,Desk Lamp,Furniture,9,34.99,0.1
+1016,2024-04-02,West,Acme Corp,Laptop,Electronics,1,899.00,0
+1017,2024-04-08,North,Stark Industries,Office Chair,Furniture,6,149.50,0.15
+1018,2024-04-15,South,Initech,Headphones,Electronics,7,79.00,0
+1019,2024-04-22,East,Wayne Enterprises,Keyboard,Electronics,20,49.99,0.25
+1020,2024-04-29,West,Umbrella Inc,Desk,Furniture,3,399.00,0.05
+1021,2024-05-03,North,Globex,Monitor,Electronics,5,229.99,0.1
+1022,2024-05-10,South,Acme Corp,Laptop,Electronics,4,899.00,0
+1023,2024-05-17,East,Stark Industries,Desk Lamp,Furniture,,34.99,0
+1024,2024-05-24,West,Initech,Office Chair,Furniture,5,149.50,0.1
+1025,2024-05-31,North,Wayne Enterprises,Headphones,Electronics,9,79.00,0.05
+1026,2024-06-04,South,Umbrella Inc,Keyboard,Electronics,11,49.99,0
+1027,2024-06-11,East,Globex,Laptop,Electronics,2,899.00,0.1
+1028,2024-06-18,West,Acme Corp,Monitor,Electronics,6,229.99,0.15
+1029,2024-06-25,North,Stark Industries,Desk,Furniture,1,399.00,0
+1030,2024-06-30,South,Initech,Desk Lamp,Furniture,8,34.99,0.05

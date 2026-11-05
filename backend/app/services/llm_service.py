@@ -94,6 +94,26 @@ async def _ask(chain, inputs: dict) -> str:
     except groq.APIError as e:
         raise HTTPException(502, f"Language model request failed: {e.__class__.__name__}")
 
+async def generate_sql(
+    question: str,
+    tables: list[dict],
+    dictionary: dict | None = None,
+    examples: list[dict] | None = None,
+) -> str:
+    """Question → cleaned, validated SQL. Shared by the api and the eval runner."""
+    sql_chain, _ = _chains()
+    raw_sql = await _ask(sql_chain, {
+        "schema": _schema_str(tables, dictionary),
+        "examples": _examples_str(examples or []),
+        "question": question
+    })
+    sql = clean_sql(raw_sql)
+    try:
+        validate_sql(sql)
+    except ValueError as e:
+        raise _fail(400, str(e), sql)
+    return sql
+
 async def answer_question(
     question: str,
     dataset_id: str,
@@ -101,22 +121,9 @@ async def answer_question(
     dictionary: dict | None = None,
     examples: list[dict] | None = None,
 ) -> dict:
-    schema = _schema_str(tables, dictionary)
-
-    # Step 1: Generate SQL
-    sql_chain, insight_chain = _chains()
-    raw_sql = await _ask(sql_chain, {
-        "schema": schema,
-        "examples": _examples_str(examples or []),
-        "question": question
-    })
-
-    # Step 2: Validate
-    sql = clean_sql(raw_sql)
-    try:
-        validate_sql(sql)
-    except ValueError as e:
-        raise _fail(400, str(e), sql)
+    # Steps 1–2: generate and validate SQL
+    sql = await generate_sql(question, tables, dictionary, examples)
+    _, insight_chain = _chains()
 
     # Step 3: Execute (off the event loop — DuckDB is synchronous)
     try:
