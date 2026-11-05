@@ -96,7 +96,10 @@ jobs:
           codes=$(for i in $(seq 1 10); do curl -s -o /dev/null -w '%{http_code} ' -F "file=@samples/sales.csv" http://localhost:8000/api/upload; done)
           echo "$codes"
           echo "$codes" | grep -q 429
-          docker compose exec -T redis redis-cli --scan --pattern 'iq:rl:upload:*' | grep -q .
+          # the counters live in redis, not in the api process
+          keys=$(docker compose exec -T redis redis-cli --scan --pattern 'iq:rl:upload:*')
+          echo "$keys"
+          test -n "$keys"
       - name: logs
         if: failure()
         run: |
