@@ -2,6 +2,8 @@ import os
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, String, Integer, Text, DateTime, JSON, Boolean, false as sa_false
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.types import TypeDecorator
+from pgvector.sqlalchemy import Vector
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -25,6 +27,22 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
+EMBEDDING_DIM = 384
+
+class Embedding(TypeDecorator):
+    """pgvector `vector(384)` on Postgres (indexed nearest-neighbour search),
+    a JSON list elsewhere (SQLite fallback, compared in Python)."""
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(Vector(EMBEDDING_DIM))
+        return dialect.type_descriptor(JSON())
+
+    def process_result_value(self, value, dialect):
+        return None if value is None else [float(x) for x in value]
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -45,12 +63,15 @@ class Dataset(Base):
     preview: Mapped[list | None] = mapped_column(JSON)
     warnings: Mapped[list] = mapped_column(JSON, default=list)
     tables: Mapped[list | None] = mapped_column(JSON)
+    # {table: {column: description}}, written by the user, shown to the model
+    dictionary: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 class QueryLog(Base):
-    """Every question asked, with the SQL it produced. Successful rows become
-    few-shot examples later, failed ones show where the prompt is weak."""
+    """Every question asked, with the SQL it produced. Successful rows are
+    retrieved as few-shot examples for similar questions on the same schema;
+    failed ones show where the prompt is weak."""
     __tablename__ = "query_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -63,4 +84,9 @@ class QueryLog(Base):
     row_count: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int] = mapped_column(Integer)
     cached: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
+    # same tables + columns → same hash, so examples carry over between uploads of the same file
+    schema_hash: Mapped[str | None] = mapped_column(String(32), index=True)
+    embedding: Mapped[list | None] = mapped_column(Embedding())
+    embedder: Mapped[str | None] = mapped_column(String(32))   # vectors only compare within one embedder
+    feedback: Mapped[bool | None] = mapped_column(Boolean)     # thumbs up / down from the user
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

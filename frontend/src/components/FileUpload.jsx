@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { uploadDataset } from '../api';
+import ColumnNotes from './ColumnNotes';
 
 const FileUpload = ({ onUploadSuccess }) => {
   const [file, setFile] = useState(null);
@@ -72,6 +73,9 @@ const FileUpload = ({ onUploadSuccess }) => {
               {uploaded.warnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
           )}
+          <div className="mt-3">
+            <ColumnNotes key={uploaded.dataset_id} dataset={uploaded} />
+          </div>
         </div>
       )}
     </div>

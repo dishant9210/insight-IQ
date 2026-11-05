@@ -46,6 +46,9 @@ Every non-empty sheet in an Excel file becomes its own table (`Customer List` �
 ### ⚡ **Fast**
 Groq inference plus DuckDB's columnar engine means most questions come back in a second or two, even on a few hundred thousand rows.
 
+### 🧭 **Learns from past answers (RAG)**
+Every answered question is embedded and stored. When a new question comes in, the closest past questions **on data with the same columns** are retrieved (pgvector, cosine distance) and put in the prompt as worked examples. Thumbs-up / thumbs-down on each answer decides what stays in that pool. You can also write a short note per column (*"discount — fraction off list price, 0–1"*) and the model sees it next to the schema. Workbooks with many sheets only send the sheets closest to the question.
+
 ### ♻️ **Cached and rate-limited**
 Asking the same question about the same file again returns the stored answer with no model call (and a *Cached* badge in the UI). Each client gets a per-minute and per-day budget of questions and uploads, so one visitor can't burn through the Groq quota.
 
@@ -71,7 +74,10 @@ LLM output is treated as untrusted input. See [Security](#-security).
  question ──▶ rate limit ──▶ answer cache ──hit──▶ result
                                │ miss
                                ▼
-              api ──▶ schema + sample rows ──▶ LLM (Groq) ──▶ SQL ──▶ guard ──▶ DuckDB (read-only) ──▶ result
+     embed question ──▶ pgvector: similar past Q→SQL (same schema, not 👎)
+                    └─▶ closest tables (big workbooks) + column notes
+                               ▼
+              api ──▶ schema + notes + examples ──▶ LLM (Groq) ──▶ SQL ──▶ guard ──▶ DuckDB (read-only) ──▶ result
                                                                                               │
                                                                                LLM (Groq) ──▶ insight
 ```
@@ -80,16 +86,17 @@ LLM output is treated as untrusted input. See [Security](#-security).
 | :--- | :--- |
 | **api** | FastAPI. Accepts uploads, answers questions, serves dataset status. Runs migrations on start. |
 | **worker** | Same image, `python -m app.worker`. Parses uploads off the request path, so a big workbook never holds a request open. |
-| **Postgres** | Dataset metadata and status, plus a log of every question with its SQL, outcome and latency. |
+| **Postgres + pgvector** | Dataset metadata, status and column notes, plus a log of every question with its SQL, outcome, latency, feedback and embedding (HNSW index for nearest-neighbour search). |
 | **Redis** | The ingest queue ([RQ](https://python-rq.org)), the answer cache and the rate-limit counters — shared by every api replica. |
 | **frontend** | React build behind nginx. |
 
 Without `REDIS_URL` the api parses uploads itself and keeps the cache and rate-limit counters in memory, and without `DATABASE_URL` it uses a SQLite file, so a single container still runs the whole app.
 
 1. **Upload** — the file is streamed to disk (size-capped) and the api answers `202` straight away. The worker parses it with the matching loader and writes it into its own DuckDB database; the dataset row in Postgres goes `pending → processing → ready` (or `failed` with the reason). The frontend polls until it's ready.
-2. **Query** — the schema and a few sample rows go to the model with the question. The returned SQL is cleaned and validated, then run with a row limit and a timeout.
-3. **Insight** — the first few result rows go back to the model for a short written summary. If the query returned nothing, this step is skipped.
-4. **Cache** — the answer is stored under the dataset id and the normalised question (case, spacing and a trailing `?` don't matter) for `ANSWER_CACHE_TTL_SECONDS`. Datasets never change after upload, so a cached answer can't go stale. Failed questions aren't cached.
+2. **Retrieve** — the question is embedded; past questions with the same table/column layout that ran fine and weren't thumbed down are pulled in as examples if they're close enough. Re-uploading the same spreadsheet next month reuses everything learned on the last one.
+3. **Query** — the schema (with any column notes), a few sample rows and the examples go to the model with the question. The returned SQL is cleaned and validated, then run with a row limit and a timeout.
+4. **Insight** — the first few result rows go back to the model for a short written summary. If the query returned nothing, this step is skipped.
+5. **Cache** — the answer is stored under the dataset id and the normalised question (case, spacing and a trailing `?` don't matter) for `ANSWER_CACHE_TTL_SECONDS`. Datasets never change after upload, so a cached answer can't go stale. Failed questions aren't cached, a thumbs-down evicts the answer, and editing the column notes changes the key.
 
 ---
 
@@ -114,9 +121,9 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | :--- | :--- |
 | **Frontend** | React 19, Vite, Tailwind CSS |
 | **Backend** | FastAPI, Pydantic, LangChain, SQLAlchemy, Alembic |
-| **Data** | PostgreSQL (metadata), DuckDB (queries), pandas, pyarrow |
-| **Queue** | Redis + RQ worker |
-| **AI/LLM** | Groq (GPT-OSS 120B by default, any Groq model via `GROQ_MODEL`) |
+| **Data** | PostgreSQL + pgvector (metadata, query log, embeddings), DuckDB (queries), pandas, pyarrow |
+| **Queue / cache** | Redis — RQ worker, answer cache, rate limits |
+| **AI/LLM** | Groq (GPT-OSS 120B by default, any Groq model via `GROQ_MODEL`), fastembed (bge-small-en-v1.5) for retrieval |
 | **Infrastructure** | Docker, Docker Compose, GitHub Actions, Fly.io |
 
 ---
@@ -151,6 +158,9 @@ cp frontend/.env.example frontend/.env
 | `ANSWER_CACHE_TTL_SECONDS` | `3600` | `0` turns the cache off |
 | `RATE_LIMIT_QUERY` | `20/minute,200/day` | per client; `second` / `minute` / `hour` / `day`, empty = off |
 | `RATE_LIMIT_UPLOAD` | `10/minute,100/day` | |
+| `EMBEDDER` | `hash` | `fastembed` (bge-small, ONNX, ~300 MB RAM, understands paraphrases) or `hash` (no model, matches shared wording) |
+| `FEW_SHOT_K` | `3` | past answers per prompt, `0` = off |
+| `SCHEMA_MAX_TABLES` | `6` | above this, only the closest sheets are sent |
 | `CLIENT_IP_HEADER` | — | header a trusted proxy sets with the real client IP (`Fly-Client-IP` on Fly) |
 | `VITE_API_URL` (frontend) | `http://localhost:8000` | |
 
@@ -225,7 +235,9 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 | :--- | :--- | :--- |
 | `POST` | `/api/upload` | multipart file → `202` with `dataset_id` and `status` when a worker is running, else `200` with the parsed dataset |
 | `GET` | `/api/datasets/{id}` | status (`pending` / `processing` / `ready` / `failed`), columns, tables, preview, warnings |
-| `POST` | `/api/query` | `{ dataset_id, question }` → `sql`, `result`, `insight`, `chart_type`, `truncated`, `cached` |
+| `POST` | `/api/query` | `{ dataset_id, question }` → `query_id`, `sql`, `result`, `insight`, `chart_type`, `truncated`, `cached`, `examples_used`, `tables_used` |
+| `PUT` | `/api/datasets/{id}/dictionary` | `{ tables: { table: { column: note } } }` — column notes for the prompt |
+| `POST` | `/api/queries/{query_id}/feedback` | `{ helpful: bool }` — 👍 keeps it as an example, 👎 removes it and evicts the cached answer |
 | `GET` | `/health` | liveness |
 | `GET` | `/ready` | readiness — database, queue and cache reachable |
 
@@ -237,6 +249,7 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 - [x] Postgres + Redis queue + ingestion worker
 - [x] Tests + CI
 - [x] Rate limiting and answer caching (Redis)
-- [ ] Few-shot retrieval from past queries (pgvector)
+- [x] Few-shot retrieval from past queries, column notes, schema selection (pgvector)
+- [ ] Text-to-SQL eval set in CI
 - [ ] Metrics and dashboards (Prometheus, Grafana)
 - [x] Hosted demo

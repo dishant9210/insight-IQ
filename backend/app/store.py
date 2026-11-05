@@ -33,6 +33,9 @@ class RedisStore:
     def set(self, key: str, value: str, ttl: int):
         self.r.set(PREFIX + key, value, ex=ttl)
 
+    def delete(self, key: str):
+        self.r.delete(PREFIX + key)
+
     def hit(self, key: str, window: int) -> tuple[int, int]:
         """Count one request in a fixed window. Returns (count, seconds until reset)."""
         k = PREFIX + key
@@ -80,6 +83,10 @@ class MemoryStore:
             now = time.monotonic()
             self._make_room(now)
             self._data[key] = (value, now + ttl)
+
+    def delete(self, key: str):
+        with self._lock:
+            self._data.pop(key, None)
 
     def hit(self, key: str, window: int) -> tuple[int, int]:
         with self._lock:

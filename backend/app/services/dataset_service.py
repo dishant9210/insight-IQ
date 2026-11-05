@@ -39,6 +39,7 @@ def to_meta(ds: Dataset) -> dict:
         "preview": ds.preview or [],
         "warnings": ds.warnings or [],
         "tables": ds.tables or [],
+        "dictionary": ds.dictionary or {},
     }
 
 def tables_of(meta: dict) -> list[dict]:
@@ -125,6 +126,28 @@ async def save_upload(file: UploadFile) -> tuple[str, str, bool]:
         job_id=dataset_id,
     )
     return dataset_id, raw_path, True
+
+MAX_NOTE_CHARS = 300
+
+def set_dictionary(dataset_id: str, notes: dict[str, dict[str, str]]) -> dict:
+    """Replace the column notes for a ready dataset. Unknown tables or columns
+    are a 400, blank notes are dropped."""
+    meta = get_ready_dataset(dataset_id)
+    columns = {t["name"]: set(t["columns"]) for t in tables_of(meta)}
+    clean: dict[str, dict[str, str]] = {}
+    for table, cols in notes.items():
+        if table not in columns:
+            raise HTTPException(400, f"No table called {table!r}. Tables: {sorted(columns)}")
+        for col, note in cols.items():
+            if col not in columns[table]:
+                raise HTTPException(400, f"Table {table!r} has no column {col!r}")
+            note = " ".join(str(note).split())
+            if len(note) > MAX_NOTE_CHARS:
+                raise HTTPException(400, f"Note for {table}.{col} is over {MAX_NOTE_CHARS} characters")
+            if note:
+                clean.setdefault(table, {})[col] = note
+    _set(dataset_id, dictionary=clean or None)
+    return get_dataset(dataset_id)
 
 def _set(dataset_id: str, **fields):
     with SessionLocal() as s:

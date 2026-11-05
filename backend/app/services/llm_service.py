@@ -24,9 +24,10 @@ Rules:
   listed below (a single-table dataset is always the table named data)
 - If the answer needs columns from more than one table, JOIN them on a shared key
 - Use DuckDB syntax (e.g. STRFTIME for dates)
+- Column notes after a dash come from the dataset owner; trust them over guesses
 
 {schema}
-"""),
+{examples}"""),
     ("human", "{question}")
 ])
 
@@ -35,11 +36,15 @@ INSIGHT_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "Question: {question}\nResults: {results}")
 ])
 
-def _schema_str(tables: list[dict]) -> str:
+def _schema_str(tables: list[dict], dictionary: dict | None = None) -> str:
     parts = []
     for t in tables:
         dtypes = t["detected_types"]
-        cols = "\n".join(f"  {col} ({dtypes.get(col, 'unknown')})" for col in t["columns"])
+        notes = (dictionary or {}).get(t["name"], {})
+        cols = "\n".join(
+            f"  {col} ({dtypes.get(col, 'unknown')})" + (f" — {notes[col]}" if notes.get(col) else "")
+            for col in t["columns"]
+        )
         label = f" (sheet '{t['sheet']}')" if t.get("sheet") else ""
         parts.append(
             f"Table name: {t['name']}{label}, {t['rows']} rows\n"
@@ -47,6 +52,15 @@ def _schema_str(tables: list[dict]) -> str:
             f"Sample rows: {t['preview'][:3]}"
         )
     return "\n\n".join(parts)
+
+def _examples_str(examples: list[dict]) -> str:
+    if not examples:
+        return ""
+    shots = "\n\n".join(f"Q: {e['question']}\nSQL: {e['sql']}" for e in examples)
+    return (
+        "\nSimilar questions already answered on this same schema. Reuse their "
+        "patterns where they fit, but answer the new question:\n\n" + shots + "\n"
+    )
 
 # Built on first use, so the api (and /health, /ready, uploads) still starts
 # without a Groq key — only answering questions needs one.
@@ -84,13 +98,16 @@ async def answer_question(
     question: str,
     dataset_id: str,
     tables: list[dict],
+    dictionary: dict | None = None,
+    examples: list[dict] | None = None,
 ) -> dict:
-    schema = _schema_str(tables)
+    schema = _schema_str(tables, dictionary)
 
     # Step 1: Generate SQL
     sql_chain, insight_chain = _chains()
     raw_sql = await _ask(sql_chain, {
         "schema": schema,
+        "examples": _examples_str(examples or []),
         "question": question
     })
 

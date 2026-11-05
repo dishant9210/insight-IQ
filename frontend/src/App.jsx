@@ -48,7 +48,7 @@ function App() {
         </div>
       )}
 
-      <ResultsTable queryData={queryData} />
+      <ResultsTable key={queryData?.query_id} queryData={queryData} />
     </div>
   );
 }

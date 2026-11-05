@@ -10,7 +10,7 @@ from app.store import get_store
 log = logging.getLogger(__name__)
 
 WINDOWS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
-DEFAULTS = {"query": "20/minute,200/day", "upload": "10/minute,100/day"}
+DEFAULTS = {"query": "20/minute,200/day", "upload": "10/minute,100/day", "feedback": "30/minute"}
 
 # Behind a proxy every request comes from the proxy, so read the real client
 # from a header it sets and clients can't forge (Fly: Fly-Client-IP).

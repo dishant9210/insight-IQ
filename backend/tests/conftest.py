@@ -7,6 +7,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{_tmp}/test.db")   # CI overri
 os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["MAX_UPLOAD_MB"] = "1"
 os.environ.pop("REDIS_URL", None)
+os.environ["EMBEDDER"] = "hash"           # no model download in tests
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest

@@ -1,9 +1,26 @@
+import { useState } from 'react';
+import { sendFeedback } from '../api';
+
 const ResultsTable = ({ queryData }) => {
+  const [vote, setVote] = useState(null);
+  const [voteError, setVoteError] = useState('');
   const result = queryData?.result || [];
   const insight = queryData?.insight || "";
   const sql = queryData?.sql || "";
   const truncated = queryData?.truncated || false;
   const cached = queryData?.cached || false;
+  const examplesUsed = queryData?.examples_used || 0;
+  const queryId = queryData?.query_id;
+
+  const rate = async (helpful) => {
+    setVoteError('');
+    try {
+      await sendFeedback(queryId, helpful);
+      setVote(helpful);
+    } catch (err) {
+      setVoteError(err.message);
+    }
+  };
 
   if (!queryData) return null;
 
@@ -61,6 +78,27 @@ const ResultsTable = ({ queryData }) => {
             <p className="px-6 py-2 text-xs text-slate-500 bg-slate-50 border-t border-slate-200">
               Showing the first {result.length.toLocaleString()} rows.
             </p>
+          )}
+        </div>
+      )}
+
+      {/* Feedback: thumbs down drops the cached answer and keeps this SQL out of future prompts */}
+      {queryId && (
+        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          {vote === null ? (
+            <>
+              <span>Was this answer right?</span>
+              <button onClick={() => rate(true)} className="px-2 py-1 rounded border border-slate-200 hover:bg-emerald-50" aria-label="Yes, helpful">👍</button>
+              <button onClick={() => rate(false)} className="px-2 py-1 rounded border border-slate-200 hover:bg-red-50" aria-label="No, wrong">👎</button>
+            </>
+          ) : (
+            <span>{vote ? 'Thanks, this will guide similar questions.' : "Thanks. Ask again and it won't reuse this answer."}</span>
+          )}
+          {voteError && <span className="text-red-600">{voteError}</span>}
+          {examplesUsed > 0 && (
+            <span className="ml-auto" title="Similar questions answered before on data with the same columns were shown to the model">
+              Guided by {examplesUsed} past answer{examplesUsed > 1 ? 's' : ''}
+            </span>
           )}
         </div>
       )}

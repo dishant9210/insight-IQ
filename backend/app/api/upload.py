@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Response
-from app.services.dataset_service import save_upload, ingest, get_dataset, tables_of
-from app.models.schemas import UploadResponse
+from app.services.dataset_service import save_upload, ingest, get_dataset, tables_of, set_dictionary
+from app.models.schemas import UploadResponse, DictionaryUpdate
 from app.services.rate_limit import limit
 
 router = APIRouter(prefix="/api", tags=["datasets"])
@@ -37,3 +37,9 @@ async def upload_dataset(response: Response, file: UploadFile = File(...)):
 @router.get("/datasets/{dataset_id}", response_model=UploadResponse)
 async def dataset_info(dataset_id: str):
     return _response(get_dataset(dataset_id))
+
+@router.put("/datasets/{dataset_id}/dictionary", response_model=UploadResponse)
+def update_dictionary(dataset_id: str, req: DictionaryUpdate):
+    """Column notes ("amount — revenue in INR, after discount") that go into
+    the prompt next to each column."""
+    return _response(set_dictionary(dataset_id, req.tables))

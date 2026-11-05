@@ -18,7 +18,7 @@ jobs:
             database_url: postgresql://insightiq:insightiq@localhost:5432/insightiq
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: insightiq
           POSTGRES_PASSWORD: insightiq
@@ -89,11 +89,29 @@ jobs:
           done
           test "$status" = ready
           curl -sf http://localhost:8080 | grep -q "<title>InsightIQ</title>"
+      - name: retrieval stack is in place
+        run: |
+          set -euo pipefail
+          # migration enabled pgvector and built the HNSW index
+          ext=$(docker compose exec -T postgres psql -U insightiq -tAc "select extname from pg_extension where extname = 'vector'")
+          idx=$(docker compose exec -T postgres psql -U insightiq -tAc "select indexname from pg_indexes where indexname = 'ix_query_log_embedding'")
+          echo "extension: $ext, index: $idx"
+          test "$ext" = vector && test "$idx" = ix_query_log_embedding
+          # the model is baked into the image: loads with the network cut off
+          docker compose exec -T -e HF_HUB_OFFLINE=1 api python -c "from app.services.embeddings import FastEmbedder; print(FastEmbedder().embed(['total revenue by region']).shape)"
+          # column notes round-trip
+          id=$(curl -s http://localhost:8000/api/upload -F "file=@samples/sales.csv" | python3 -c "import sys,json; print(json.load(sys.stdin)['dataset_id'])")
+          for i in $(seq 1 30); do
+            [ "$(curl -s http://localhost:8000/api/datasets/$id | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")" = ready ] && break
+            sleep 1
+          done
+          curl -sf -X PUT http://localhost:8000/api/datasets/$id/dictionary -H 'content-type: application/json' \
+            -d '{"tables": {"data": {"discount": "fraction off list price, 0-1"}}}' | grep -q 'fraction off list price'
       - name: rate limit is shared through redis
         run: |
           set -euo pipefail
-          # uploads are capped at 10/minute per client; one is already spent above
-          codes=$(for i in $(seq 1 10); do curl -s -o /dev/null -w '%{http_code} ' -F "file=@samples/sales.csv" http://localhost:8000/api/upload; done)
+          # uploads are capped at 10/minute per client; two are already spent above
+          codes=$(for i in $(seq 1 9); do curl -s -o /dev/null -w '%{http_code} ' -F "file=@samples/sales.csv" http://localhost:8000/api/upload; done)
           echo "$codes"
           echo "$codes" | grep -q 429
           # the counters live in redis, not in the api process

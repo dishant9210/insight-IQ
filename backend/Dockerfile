@@ -4,10 +4,18 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UPLOAD_DIR=/data/uploads
+    UPLOAD_DIR=/data/uploads \
+    FASTEMBED_CACHE_PATH=/opt/fastembed
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Bake the embedding model into the image when EMBEDDER=fastembed will be used,
+# so the first question doesn't wait on a download. Empty = skip (EMBEDDER=hash).
+ARG EMBEDDING_MODEL=""
+RUN if [ -n "$EMBEDDING_MODEL" ]; then \
+      python -c "from fastembed import TextEmbedding; TextEmbedding('$EMBEDDING_MODEL')"; \
+    fi
 
 COPY alembic.ini .
 COPY migrations ./migrations

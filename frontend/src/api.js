@@ -49,3 +49,20 @@ export function queryDataset(datasetId, question) {
     body: JSON.stringify({ dataset_id: datasetId, question }),
   });
 }
+
+export function sendFeedback(queryId, helpful) {
+  return request(`/api/queries/${queryId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ helpful }),
+  });
+}
+
+// notes: { table: { column: "what this column means" } }
+export function saveDictionary(datasetId, notes) {
+  return request(`/api/datasets/${datasetId}/dictionary`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tables: notes }),
+  });
+}
