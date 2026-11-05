@@ -1,7 +1,8 @@
 """Retrieval-augmented prompting.
 
 - Few-shot: past questions on the same schema that ran fine and weren't
-  marked unhelpful, nearest first. On Postgres the search is a pgvector
+  marked unhelpful, nearest first. Guest questions are a shared pool; a
+  signed-in user also draws on their own, and never on another account's. On Postgres the search is a pgvector
   HNSW lookup; on SQLite the recent rows are scored in Python.
 - Schema selection: a workbook with many sheets only sends the tables
   closest to the question, so the prompt stays small and focused.
@@ -26,16 +27,21 @@ def schema_hash(tables: list[dict]) -> str:
 def _norm_sql(sql: str) -> str:
     return " ".join(sql.lower().split()).rstrip(";")
 
-def find_examples(schema: str, vector: list[float], k: int = FEW_SHOT_K) -> list[dict]:
+def find_examples(schema: str, vector: list[float], k: int = FEW_SHOT_K,
+                  user_id: str | None = None) -> list[dict]:
     """Up to k {question, sql, score} from past successful queries on this schema."""
     if k <= 0:
         return []
     embedder = get_embedder()
+    pool = QueryLog.user_id.is_(None)
+    if user_id is not None:
+        pool = pool | (QueryLog.user_id == user_id)
     ok = (
         (QueryLog.schema_hash == schema)
         & (QueryLog.status == "ok")
         & (QueryLog.embedder == embedder.name)
         & QueryLog.embedding.is_not(None)
+        & pool
     )
     with SessionLocal() as s:
         # a thumbs-down on any copy of a query rules that SQL out everywhere

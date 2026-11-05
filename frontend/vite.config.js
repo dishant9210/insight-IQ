@@ -5,4 +5,10 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
   ],
+  // same-origin /api in dev too, like the gateway, so the refresh cookie works
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8000',
+    },
+  },
 })

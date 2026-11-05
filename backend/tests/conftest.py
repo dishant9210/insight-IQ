@@ -9,6 +9,8 @@ os.environ["MAX_UPLOAD_MB"] = "1"
 os.environ.pop("REDIS_URL", None)
 os.environ["EMBEDDER"] = "hash"           # no model download in tests
 os.environ["METRICS_PORT"] = "0"          # no metrics server; tests read the registry directly
+os.environ["JWT_SECRET"] = "test-secret-that-is-long-enough-for-hs256"
+os.environ["COOKIE_SECURE"] = "false"     # the test client talks plain http
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
@@ -17,7 +19,7 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
-from app.db import SessionLocal, Dataset, QueryLog
+from app.db import SessionLocal, Dataset, QueryLog, RefreshToken, User
 from app.main import app
 from app.services import llm_service
 from app import store
@@ -38,6 +40,8 @@ def clean_db():
     with SessionLocal() as s:
         s.execute(delete(QueryLog))
         s.execute(delete(Dataset))
+        s.execute(delete(RefreshToken))
+        s.execute(delete(User))
         s.commit()
 
 @pytest.fixture(autouse=True)
@@ -94,3 +98,22 @@ def upload_sales(client):
         assert r.status_code == 200, r.text
         return r.json()
     return go
+
+PASSWORD = "correct horse battery"
+
+def sign_up(client, email):
+    """Register and return Authorization headers. Each user gets their own
+    client so refresh cookies don't mix."""
+    r = client.post("/api/auth/register", json={"email": email, "password": PASSWORD})
+    assert r.status_code == 201, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+@pytest.fixture
+def alice():
+    c = TestClient(app)
+    return c, sign_up(c, "alice@example.com")
+
+@pytest.fixture
+def bob():
+    c = TestClient(app)
+    return c, sign_up(c, "bob@example.com")

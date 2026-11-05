@@ -4,6 +4,11 @@ uvicorn[standard]==0.44.0
 python-multipart==0.0.26
 python-dotenv==1.1.1
 pydantic==2.12.5
+email-validator==2.3.0
+
+# auth
+pyjwt==2.15.1
+argon2-cffi==25.1.0
 
 # storage + queue
 sqlalchemy==2.1.8

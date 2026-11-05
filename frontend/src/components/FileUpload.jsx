@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { uploadDataset } from '../api';
 import ColumnNotes from './ColumnNotes';
 
-const FileUpload = ({ onUploadSuccess }) => {
+// `dataset` is whatever is open: just uploaded, or picked from your files
+const FileUpload = ({ dataset: uploaded, onUploadSuccess }) => {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
-  const [uploaded, setUploaded] = useState(null);
 
   const handleUpload = async () => {
     if (!file) return;
@@ -16,7 +16,6 @@ const FileUpload = ({ onUploadSuccess }) => {
 
     try {
       const data = await uploadDataset(file, { onStatus: setStatus });
-      setUploaded(data);
       onUploadSuccess(data);
     } catch (err) {
       setError(err.message);

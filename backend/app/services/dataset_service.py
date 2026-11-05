@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import duckdb
 import pandas as pd
 from fastapi import UploadFile, HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.db import SessionLocal, Dataset, UPLOAD_DIR
 from app.queue import get_queue, JOB_TIMEOUT
@@ -16,6 +16,8 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 QUERY_TIMEOUT = float(os.getenv("QUERY_TIMEOUT_SECONDS", "20"))
 MAX_RESULT_ROWS = int(os.getenv("MAX_RESULT_ROWS", "1000"))
 DATASET_TTL = float(os.getenv("DATASET_TTL_HOURS", "24")) * 3600   # 0 = keep forever
+# datasets that belong to an account are kept longer than guest uploads
+OWNED_DATASET_TTL = float(os.getenv("OWNED_DATASET_TTL_HOURS", "720")) * 3600
 CHUNK = 1024 * 1024
 
 def _db_path(dataset_id: str) -> str:
@@ -33,6 +35,7 @@ def _remove(*paths: str):
 def to_meta(ds: Dataset) -> dict:
     return {
         "dataset_id": ds.id,
+        "owner_id": ds.owner_id,
         "filename": ds.filename,
         "status": ds.status,
         "error": ds.error,
@@ -57,17 +60,26 @@ def tables_of(meta: dict) -> list[dict]:
     }]
 
 def cleanup_old():
-    if not DATASET_TTL:
+    now = datetime.now(timezone.utc)
+    expired = []
+    if DATASET_TTL:
+        expired.append(Dataset.owner_id.is_(None) & (Dataset.created_at < now - timedelta(seconds=DATASET_TTL)))
+    if OWNED_DATASET_TTL:
+        expired.append(Dataset.owner_id.is_not(None)
+                       & (Dataset.created_at < now - timedelta(seconds=OWNED_DATASET_TTL)))
+    if not expired:
         return
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DATASET_TTL)
     with SessionLocal() as s:
-        old = s.scalars(select(Dataset).where(Dataset.created_at < cutoff)).all()
-        for ds in old:
+        for ds in s.scalars(select(Dataset).where(or_(*expired))).all():
             _remove(_db_path(ds.id))
             s.delete(ds)
         s.commit()
 
-def get_dataset(dataset_id: str) -> dict:
+# get_dataset(id) without a viewer is the app itself (worker, query runner);
+# with one, a dataset owned by someone else doesn't exist
+_INTERNAL = object()
+
+def get_dataset(dataset_id: str, viewer: str | None | object = _INTERNAL) -> dict:
     # ids are uuids we minted — anything else is not a real dataset (and would
     # otherwise be joined straight into a file path)
     try:
@@ -77,12 +89,12 @@ def get_dataset(dataset_id: str) -> dict:
 
     with SessionLocal() as s:
         ds = s.get(Dataset, dataset_id)
-    if ds is None:
+    if ds is None or (viewer is not _INTERNAL and ds.owner_id is not None and ds.owner_id != viewer):
         raise HTTPException(404, "Dataset not found. Upload a file first.")
     return to_meta(ds)
 
-def get_ready_dataset(dataset_id: str) -> dict:
-    meta = get_dataset(dataset_id)
+def get_ready_dataset(dataset_id: str, viewer: str | None | object = _INTERNAL) -> dict:
+    meta = get_dataset(dataset_id, viewer)
     if meta["status"] == "failed":
         raise HTTPException(409, f"This dataset failed to load: {meta['error']}")
     if meta["status"] != "ready":
@@ -102,7 +114,7 @@ async def _write_upload(file: UploadFile, dest: str) -> int:
         raise HTTPException(413, f"File too large. Limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     return size
 
-async def save_upload(file: UploadFile) -> tuple[str, str, bool]:
+async def save_upload(file: UploadFile, owner_id: str | None = None) -> tuple[str, str, bool]:
     """Store the raw file and register the dataset.
     Returns (dataset_id, raw_path, queued) — queued is False when there's no Redis."""
     cleanup_old()
@@ -113,7 +125,8 @@ async def save_upload(file: UploadFile) -> tuple[str, str, bool]:
     await _write_upload(file, raw_path)
 
     with SessionLocal() as s:
-        s.add(Dataset(id=dataset_id, filename=file.filename, status="pending", warnings=[]))
+        s.add(Dataset(id=dataset_id, owner_id=owner_id, filename=file.filename,
+                      status="pending", warnings=[]))
         s.commit()
 
     queue = get_queue()
@@ -133,10 +146,29 @@ async def save_upload(file: UploadFile) -> tuple[str, str, bool]:
 
 MAX_NOTE_CHARS = 300
 
-def set_dictionary(dataset_id: str, notes: dict[str, dict[str, str]]) -> dict:
+def list_datasets(owner_id: str, limit: int = 50) -> list[Dataset]:
+    with SessionLocal() as s:
+        return s.scalars(
+            select(Dataset).where(Dataset.owner_id == owner_id)
+            .order_by(Dataset.created_at.desc()).limit(limit)
+        ).all()
+
+def delete_dataset(dataset_id: str, viewer: str):
+    """Owner only. Guest uploads have no owner and just expire."""
+    meta = get_dataset(dataset_id, viewer)
+    if meta["owner_id"] != viewer:
+        raise HTTPException(403, "Only datasets you uploaded while signed in can be deleted")
+    with SessionLocal() as s:
+        if (ds := s.get(Dataset, dataset_id)) is not None:
+            s.delete(ds)
+            s.commit()
+    _remove(_db_path(dataset_id))
+
+def set_dictionary(dataset_id: str, notes: dict[str, dict[str, str]],
+                   viewer: str | None | object = _INTERNAL) -> dict:
     """Replace the column notes for a ready dataset. Unknown tables or columns
     are a 400, blank notes are dropped."""
-    meta = get_ready_dataset(dataset_id)
+    meta = get_ready_dataset(dataset_id, viewer)
     columns = {t["name"]: set(t["columns"]) for t in tables_of(meta)}
     clean: dict[str, dict[str, str]] = {}
     for table, cols in notes.items():

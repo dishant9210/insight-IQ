@@ -1,17 +1,21 @@
 import os
+import re
 import time
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from opentelemetry import trace
 
 load_dotenv()
 
 from app import logging_setup, metrics, tracing
 logging_setup.setup()
 
+from app.api.auth import router as auth_router
 from app.api.upload import router as upload_router
 from app.api.query import router as query_router
 from app.db import engine
@@ -33,20 +37,30 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="InsightIQ",
     description="Natural language analytics",
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
 )
 tracing.setup("insightiq-api", app)
+
+_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 @app.middleware("http")
 async def http_metrics(request: Request, call_next):
     started = time.perf_counter()
     status = 500
+    # the gateway's id when there is one, so its access log and ours line up
+    rid = request.headers.get("X-Request-ID", "")
+    if not _REQUEST_ID.fullmatch(rid):
+        rid = uuid.uuid4().hex
+    token = logging_setup.request_id.set(rid)
+    trace.get_current_span().set_attribute("http.request_id", rid)
     try:
         response = await call_next(request)
         status = response.status_code
+        response.headers["X-Request-ID"] = rid
         return response
     finally:
+        logging_setup.request_id.reset(token)
         # the route template, not the raw path, so ids don't explode the label set
         route = getattr(request.scope.get("route"), "path", "unmatched")
         metrics.HTTP_REQUESTS.labels(request.method, route, str(status)).inc()
@@ -59,7 +73,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     # let the browser read the limit headers on cross-origin responses
-    expose_headers=["Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    expose_headers=["Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset",
+                    "X-Request-ID"],
 )
 
 @app.get("/health")
@@ -101,5 +116,6 @@ def ready():
 async def root():
     return {"message": "InsightIQ API"}
 
+app.include_router(auth_router)
 app.include_router(upload_router)
 app.include_router(query_router)

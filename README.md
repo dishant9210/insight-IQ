@@ -52,6 +52,9 @@ Every answered question is embedded and stored. When a new question comes in, th
 ### ♻️ **Cached and rate-limited**
 Asking the same question about the same file again returns the stored answer with no model call (and a *Cached* badge in the UI). Each client gets a per-minute and per-day budget of questions and uploads, so one visitor can't burn through the Groq quota.
 
+### 👤 **Accounts and history**
+Use it as a guest, or sign in to keep your files private and your questions saved. History lists every question with its outcome and feedback; opening one shows the answer again with the rows re-read from the file, no model call. Your questions only ever guide your own future answers, never someone else's.
+
 ### 🔒 **Safe by construction**
 LLM output is treated as untrusted input. See [Security](#-security).
 
@@ -60,6 +63,10 @@ LLM output is treated as untrusted input. See [Security](#-security).
 ## 🔁 How it works
 
 ```
+ browser ──▶ gateway (nginx) ── /        the React app
+                            └── /api/*   ──▶ api   (request id, client IP, edge rate limit,
+                                                     security headers, one origin for cookies)
+
              ┌──────────┐  202 + dataset_id   ┌──────────┐
  upload ───▶ │   api    │ ──── enqueue ─────▶ │  Redis   │
              └────┬─────┘                     └────┬─────┘
@@ -88,7 +95,7 @@ LLM output is treated as untrusted input. See [Security](#-security).
 | **worker** | Same image, `python -m app.worker`. Parses uploads off the request path, so a big workbook never holds a request open. |
 | **Postgres + pgvector** | Dataset metadata, status and column notes, plus a log of every question with its SQL, outcome, latency, feedback and embedding (HNSW index for nearest-neighbour search). |
 | **Redis** | The ingest queue ([RQ](https://python-rq.org)), the answer cache and the rate-limit counters — shared by every api replica. |
-| **frontend** | React build behind nginx. |
+| **gateway** | nginx: serves the React build and proxies `/api` to the api, so the browser sees one origin. Adds a request id, passes the client address with a shared token, rate-limits sign-in per IP, sets CSP and other security headers, logs JSON. |
 
 Without `REDIS_URL` the api parses uploads itself and keeps the cache and rate-limit counters in memory, and without `DATABASE_URL` it uses a SQLite file, so a single container still runs the whole app.
 
@@ -154,7 +161,10 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | **Read-only connection** | Each query opens the dataset's `.duckdb` file with `read_only=True`. |
 | **No external access** | `SET enable_external_access = false` — so `SELECT * FROM read_csv_auto('/etc/passwd')` is a permission error, not a data leak. `lock_configuration = true` stops the query flipping it back. |
 | **Limits** | Results are capped (`MAX_RESULT_ROWS`), queries are interrupted after `QUERY_TIMEOUT_SECONDS`, uploads are rejected above `MAX_UPLOAD_MB`. |
-| **Rate limits** | Fixed windows per client IP (`RATE_LIMIT_QUERY`, `RATE_LIMIT_UPLOAD`). Over the limit is a `429` with `Retry-After`; every response carries `X-RateLimit-Limit` / `-Remaining` / `-Reset`. If Redis is unreachable the limiter fails open rather than taking the api down. |
+| **Accounts** | Passwords hashed with argon2id; a wrong password and an unknown email get the same answer in the same time. Access tokens are 15-minute JWTs kept in memory, never in `localStorage`. The refresh token is an httpOnly, `SameSite=Strict` cookie scoped to `/api/auth`, stored only as a hash, rotated on every use; replaying a used one revokes that whole sign-in. |
+| **Ownership** | A dataset uploaded while signed in is visible only to its owner (anyone else gets a `404`, not a `403`). History, feedback and few-shot examples are scoped per account. Guest uploads work as before and expire after `DATASET_TTL_HOURS`. |
+| **Gateway** | One origin, CSP, `X-Frame-Options: DENY`, `nosniff`, a per-IP limit on sign-in before the api is touched, and `X-Real-IP` that the api trusts only with the shared `GATEWAY_TOKEN`. |
+| **Rate limits** | Fixed windows per account when signed in, otherwise per client IP (`RATE_LIMIT_QUERY`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_AUTH`). Over the limit is a `429` with `Retry-After`; every response carries `X-RateLimit-Limit` / `-Remaining` / `-Reset`. If Redis is unreachable the limiter fails open rather than taking the api down. |
 
 ---
 
@@ -163,7 +173,8 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | Layer | Technology |
 | :--- | :--- |
 | **Frontend** | React 19, Vite, Tailwind CSS |
-| **Backend** | FastAPI, Pydantic, LangChain, SQLAlchemy, Alembic |
+| **Backend** | FastAPI, Pydantic, LangChain, SQLAlchemy, Alembic, PyJWT, argon2 |
+| **Gateway** | nginx |
 | **Data** | PostgreSQL + pgvector (metadata, query log, embeddings), DuckDB (queries), pandas, pyarrow |
 | **Queue / cache** | Redis — RQ worker, answer cache, rate limits |
 | **AI/LLM** | Groq (GPT-OSS 120B by default, any Groq model via `GROQ_MODEL`), fastembed (bge-small-en-v1.5) for retrieval |
@@ -209,13 +220,20 @@ cp frontend/.env.example frontend/.env
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | e.g. `http://tempo:4318`; tracing is off when unset |
 | `LOG_FORMAT` | `text` | `json` for one object per line with trace ids |
 | `CLIENT_IP_HEADER` | — | header a trusted proxy sets with the real client IP (`Fly-Client-IP` on Fly) |
-| `VITE_API_URL` (frontend) | `http://localhost:8000` | |
+| `JWT_SECRET` | random per start | set it (`openssl rand -hex 32`) so sessions survive restarts and replicas agree |
+| `ACCESS_TOKEN_MINUTES` / `REFRESH_TOKEN_DAYS` | `15` / `30` | |
+| `AUTH_REQUIRED` | `false` | `true` = no guest use, every dataset and query route needs a token |
+| `COOKIE_SECURE` | `true` | `false` only for plain-http local runs |
+| `GATEWAY_TOKEN` | — | shared with the gateway; the api trusts its `X-Real-IP` only with this |
+| `RATE_LIMIT_AUTH` | `10/minute,50/hour` | register + login, per IP |
+| `OWNED_DATASET_TTL_HOURS` | `720` | how long signed-in uploads are kept (`DATASET_TTL_HOURS` is for guests) |
+| `VITE_API_URL` (frontend) | empty (same origin) | `npm run dev` proxies `/api` to `localhost:8000` |
 
 ### 3. Run with Docker
 ```bash
 docker compose up --build
 ```
-Starts Postgres, Redis, the api, the worker and the frontend.
+Starts Postgres, Redis, the api, the worker and the gateway. Open http://localhost:8080.
 
 ### …or run locally
 ```bash
@@ -240,43 +258,43 @@ cd backend
 pip install -r requirements-dev.txt
 pytest
 ```
-The suite runs the real Alembic migrations, uses fakeredis for the queue, and stubs the LLM, so it needs no API key. CI runs it against both SQLite and Postgres, lints and builds the frontend, then boots the full compose stack and pushes an upload through the worker.
+The suite runs the real Alembic migrations, uses fakeredis for the queue, and stubs the LLM, so it needs no API key. CI runs it against both SQLite and Postgres, lints and builds the frontend, then boots the full compose stack, pushes an upload through the worker, and signs up, uploads privately, reads history, rotates and revokes a session and trips the sign-in limit, all through the gateway.
 
 ---
 
 ## 🚀 Deployment
 
-Both halves run on [Fly.io](https://fly.io): the API with a persistent volume for the DuckDB files, and the frontend as a static Vite build served by nginx. Live at https://insightiq-web.fly.dev (machines stop when idle, so the first request can take a few seconds).
+Both halves run on [Fly.io](https://fly.io): the API with a persistent volume for the DuckDB files, and the gateway (nginx with the React build) proxying `/api` to it. Live at https://insightiq-web.fly.dev (machines stop when idle, so the first request can take a few seconds).
 
 ### Backend
 ```bash
 cd backend
 fly launch --no-deploy        # picks up fly.toml; change the app name if it's taken
 fly volumes create insightiq_data --size 1 --region sin
-fly secrets set GROQ_API_KEY=gsk_...
+fly secrets set GROQ_API_KEY=gsk_... JWT_SECRET=$(openssl rand -hex 32)
 fly deploy
 ```
 `fly.toml` sets `UPLOAD_DIR=/data/uploads` on the mounted volume, a `/health` check, and lets the machine stop when idle so a free-tier app costs nothing between visits. Datasets older than `DATASET_TTL_HOURS` are deleted on the next upload.
 
-### Frontend
-`VITE_API_URL` is baked in at build time from `frontend/fly.toml`, so change it there if your API app has a different name.
+### Gateway
+`API_UPSTREAM` in `frontend/fly.toml` points at the api app; change it if yours has a different name. Give both apps the same gateway token so the api can trust the client address the gateway sends:
 ```bash
 cd frontend
 fly apps create insightiq-web
+token=$(openssl rand -hex 32)
+fly secrets set GATEWAY_TOKEN=$token -a insightiq-web
+fly secrets set GATEWAY_TOKEN=$token -a insightiq-api
 fly deploy
 ```
-Then point the backend's CORS at it:
-```bash
-fly secrets set ALLOWED_ORIGINS=https://insightiq-web.fly.dev -a insightiq-api
-```
-Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_API_URL`.
 
 ### Docker Compose (self-hosted)
-`docker compose up --build` runs the full stack (Postgres, Redis, api, worker, frontend) and serves the app on http://localhost:8080. Any VM with Docker can host it this way.
+`docker compose up --build` runs the full stack (Postgres, Redis, api, worker, gateway) and serves the app on http://localhost:8080. Any VM with Docker can host it this way.
 
 ---
 
 ## 🔌 API
+
+Every route works without an account. Send `Authorization: Bearer <access_token>` to act as a signed-in user. Interactive docs at `/docs` on the api.
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
@@ -285,6 +303,15 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 | `POST` | `/api/query` | `{ dataset_id, question }` → `query_id`, `sql`, `result`, `insight`, `chart_type`, `truncated`, `cached`, `examples_used`, `tables_used` |
 | `PUT` | `/api/datasets/{id}/dictionary` | `{ tables: { table: { column: note } } }` — column notes for the prompt |
 | `POST` | `/api/queries/{query_id}/feedback` | `{ helpful: bool }` — 👍 keeps it as an example, 👎 removes it and evicts the cached answer |
+| `POST` | `/api/auth/register` | `{ email, password }` → `201`, access token + user, sets the refresh cookie |
+| `POST` | `/api/auth/login` | same shape; `401` for a wrong email or password alike |
+| `POST` | `/api/auth/refresh` | cookie → new access token, rotated cookie |
+| `POST` | `/api/auth/logout` | revokes the session, clears the cookie |
+| `GET` | `/api/auth/me` | the signed-in user |
+| `GET` | `/api/datasets` | your files, newest first (signed in) |
+| `DELETE` | `/api/datasets/{id}` | delete one of your files |
+| `GET` | `/api/queries` | your history, newest first; `?dataset_id=`, `?before=` cursor, `?limit=` |
+| `GET` | `/api/queries/{query_id}` | a past answer, rows re-read from the file (or just SQL + insight if it has expired) |
 | `GET` | `/health` | liveness |
 | `GET` | `/ready` | readiness — database, queue and cache reachable |
 

@@ -1,9 +1,23 @@
 app = "insightiq-web"
 primary_region = "sin"
 
+# The app and the gateway: serves the React build and proxies /api to the api
+# app, so the browser sees one origin and the sign-in cookie is first-party.
+
 [build]
   [build.args]
-    VITE_API_URL = "https://insightiq-api.fly.dev"
+    VITE_API_URL = ""
+
+[env]
+  API_UPSTREAM = "https://insightiq-api.fly.dev"
+  RESOLVER = "[fdaa::3]"
+  # Fly's proxy is the only way in and it overwrites this header with the real client
+  REAL_IP_HEADER = "Fly-Client-IP"
+  TRUSTED_PROXIES = "0.0.0.0/0"
+  TRUSTED_PROXIES_V6 = "::/0"
+  # and the token the api uses to trust X-Real-IP, the same value on both apps:
+  #   fly secrets set GATEWAY_TOKEN=... -a insightiq-web
+  #   fly secrets set GATEWAY_TOKEN=... -a insightiq-api
 
 [http_service]
   internal_port = 80
@@ -11,6 +25,13 @@ primary_region = "sin"
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
 
 [[vm]]
   size = "shared-cpu-1x"

@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, Any
 
 class QueryRequest(BaseModel):
@@ -45,3 +46,55 @@ class UploadResponse(BaseModel):
     detected_types: dict[str, str] = {}
     tables: list[TableInfo] = []   # one per sheet for workbooks, else a single "data"
     dictionary: dict[str, dict[str, str]] = {}  # column notes the user wrote
+
+# --- accounts ----------------------------------------------------------------
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(max_length=128)
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    created_at: datetime
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int                # seconds
+    user: UserOut
+
+# --- history -----------------------------------------------------------------
+
+class HistoryItem(BaseModel):
+    query_id: int
+    dataset_id: str
+    filename: Optional[str] = None # None once the dataset has expired
+    question: str
+    status: str                    # ok | error
+    error: Optional[str] = None
+    row_count: Optional[int] = None
+    cached: bool = False
+    feedback: Optional[bool] = None
+    created_at: datetime
+
+class HistoryPage(BaseModel):
+    items: list[HistoryItem]
+    next_before: Optional[int] = None   # pass as ?before= for the next page
+
+class HistoryAnswer(QueryResponse):
+    dataset_id: str
+    dataset_available: bool        # False: the data is gone, only the SQL and insight remain
+    created_at: datetime
+
+class DatasetSummary(BaseModel):
+    dataset_id: str
+    filename: str
+    status: str
+    rows: int = 0
+    tables: int = 1
+    created_at: datetime

@@ -1,6 +1,8 @@
 import os
 from datetime import datetime, timezone
-from sqlalchemy import create_engine, String, Integer, Text, DateTime, JSON, Boolean, false as sa_false
+from sqlalchemy import (
+    create_engine, String, Integer, Text, DateTime, JSON, Boolean, ForeignKey, false as sa_false,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.types import TypeDecorator
 from pgvector.sqlalchemy import Vector
@@ -49,10 +51,35 @@ def _now() -> datetime:
 class Base(DeclarativeBase):
     pass
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True)     # stored lowercased
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+class RefreshToken(Base):
+    """One row per refresh token handed out. Only the hash is stored. Each
+    refresh revokes the token it used and issues the next one in the same
+    family; a revoked token coming back means it was copied, so the whole
+    family is revoked."""
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    family: Mapped[str] = mapped_column(String(36), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
 class Dataset(Base):
     __tablename__ = "datasets"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # null = uploaded without signing in; anyone holding the id can use it
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     filename: Mapped[str] = mapped_column(String(255))
     # pending → processing → ready | failed
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
@@ -77,11 +104,15 @@ class QueryLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # no FK — logs outlive the datasets they were asked against
     dataset_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True)   # null = guest
     question: Mapped[str] = mapped_column(Text)
     sql: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16))        # ok | error
     error: Mapped[str | None] = mapped_column(Text)
     row_count: Mapped[int | None] = mapped_column(Integer)
+    # kept so history can show the answer again without another model call
+    insight: Mapped[str | None] = mapped_column(Text)
+    chart_type: Mapped[str | None] = mapped_column(String(16))
     latency_ms: Mapped[int] = mapped_column(Integer)
     cached: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
     # same tables + columns → same hash, so examples carry over between uploads of the same file

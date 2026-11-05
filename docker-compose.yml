@@ -37,6 +37,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       ALLOWED_ORIGINS: http://localhost:8080
       EMBEDDER: fastembed
+      # sign-in: set JWT_SECRET in backend/.env or the shell to keep sessions
+      # across restarts (empty = a random secret per start)
+      JWT_SECRET: ${JWT_SECRET:-}
+      COOKIE_SECURE: "false"     # plain http on localhost; true behind TLS
+      # the gateway sends this with X-Real-IP; same value on both sides
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-local-gateway-token}
       METRICS_PORT: "9091"     # /metrics, not published outside the compose network
     volumes:
       - datasets:/data
@@ -68,15 +74,17 @@ services:
       api:
         condition: service_healthy   # migrations have run
 
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        VITE_API_URL: http://localhost:8000
+  # the one public entry point: serves the app and proxies /api to the api
+  gateway:
+    build: ./frontend
     ports:
       - "8080:80"
+    environment:
+      API_UPSTREAM: http://api:8000
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-local-gateway-token}
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

@@ -58,7 +58,7 @@ jobs:
       - run: npx eslint src
       - run: npm run build
 
-  # boots the whole stack (postgres, redis, api, worker, frontend, plus
+  # boots the whole stack (postgres, redis, api, worker, gateway, plus
   # prometheus, tempo, grafana) and pushes a real upload through the queue
   compose:
     runs-on: ubuntu-latest
@@ -120,6 +120,51 @@ jobs:
           keys=$(docker compose exec -T redis redis-cli --scan --pattern 'iq:rl:upload:*')
           echo "$keys"
           test -n "$keys"
+      - name: gateway, accounts and history
+        run: |
+          set -euo pipefail
+          gw=http://localhost:8080
+          json() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
+          curl -sf $gw/healthz
+          # one origin: the app and the api behind the same port, with security headers
+          curl -sI $gw/ | grep -qi '^content-security-policy:'
+          curl -sI $gw/ | grep -qi '^x-frame-options: deny'
+          rid=$(curl -s -D - -o /dev/null $gw/api/datasets/00000000-0000-0000-0000-000000000000 | tr -d '\r' | awk -F': ' 'tolower($1)=="x-request-id"{print $2}')
+          echo "request id: $rid"; echo "$rid" | grep -Eq '^[0-9a-f]{32}$'
+
+          # sign up through the gateway; the refresh cookie is httpOnly and scoped to /api/auth
+          jar=$(mktemp)
+          resp=$(curl -s -c $jar -D headers.txt $gw/api/auth/register -H 'content-type: application/json' \
+                 -d '{"email": "ci@example.com", "password": "ci password 123"}')
+          grep -i '^set-cookie: iq_refresh=' headers.txt | grep -qi 'httponly'
+          token=$(echo "$resp" | json "d['access_token']")
+          auth="Authorization: Bearer $token"
+          test "$(curl -s $gw/api/auth/me -H "$auth" | json "d['email']")" = ci@example.com
+
+          # an upload while signed in is private
+          id=$(curl -s $gw/api/upload -H "$auth" -F "file=@samples/sales.csv" | json "d['dataset_id']")
+          for i in $(seq 1 30); do
+            [ "$(curl -s $gw/api/datasets/$id -H "$auth" | json "d['status']")" = ready ] && break
+            sleep 1
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' $gw/api/datasets/$id)" = 404
+          test "$(curl -s $gw/api/datasets -H "$auth" | json "d[0]['dataset_id']")" = "$id"
+
+          # no model key in CI, so the question fails, but it still lands in history
+          curl -s $gw/api/query -H "$auth" -H 'content-type: application/json' \
+            -d "{\"dataset_id\": \"$id\", \"question\": \"total revenue by region\"}" -o /dev/null
+          test "$(curl -s $gw/api/queries -H "$auth" | json "d['items'][0]['question']")" = "total revenue by region"
+
+          # refresh rotates the cookie; logging out ends the session
+          new=$(curl -s -b $jar -c $jar -X POST $gw/api/auth/refresh | json "d['access_token']")
+          test -n "$new"
+          test "$(curl -s -b $jar -c $jar -o /dev/null -w '%{http_code}' -X POST $gw/api/auth/logout)" = 204
+          test "$(curl -s -b $jar -o /dev/null -w '%{http_code}' -X POST $gw/api/auth/refresh)" = 401
+
+          # the gateway's own limit on sign-in: 10/minute with a burst of 5
+          codes=$(for i in $(seq 1 20); do curl -s -o /dev/null -w '%{http_code} ' $gw/api/auth/login \
+                  -H 'content-type: application/json' -d '{"email": "ci@example.com", "password": "wrong"}'; done)
+          echo "$codes"; echo "$codes" | grep -q 429
       - name: metrics, traces and dashboards
         run: |
           set -euo pipefail

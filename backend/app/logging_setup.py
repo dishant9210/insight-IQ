@@ -4,10 +4,15 @@ text for local runs."""
 import json
 import logging
 import os
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 LOG_FORMAT = os.getenv("LOG_FORMAT", "text")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# set per request from X-Request-ID (the gateway mints one), so a log line can
+# be matched to the gateway's access log as well as to its trace
+request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -20,6 +25,8 @@ class JsonFormatter(logging.Formatter):
         }
         if (current := ids()) is not None:
             out["trace_id"], out["span_id"] = current
+        if (rid := request_id.get()) is not None:
+            out["request_id"] = rid
         if record.exc_info:
             out["exc"] = self.formatException(record.exc_info)
         return json.dumps(out, default=str)
