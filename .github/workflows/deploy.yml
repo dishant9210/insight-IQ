@@ -1,0 +1,79 @@
+name: Deploy
+
+# Ships main to Fly once CI has passed on it: the api first (it migrates on
+# boot, and the gateway in front of it should never be newer), then the
+# gateway, then checks the live site. Skips until the deploy tokens are added
+# as repository secrets, one per app so neither can touch anything else:
+#   fly tokens create deploy -a insightiq-api   ->  FLY_API_TOKEN_API
+#   fly tokens create deploy -a insightiq-web   ->  FLY_API_TOKEN_WEB
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN_API: ${{ secrets.FLY_API_TOKEN_API }}
+      FLY_API_TOKEN_WEB: ${{ secrets.FLY_API_TOKEN_WEB }}
+      API_URL: https://insightiq-api.fly.dev
+      WEB_URL: https://insightiq-web.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the commit CI passed on, not whatever main is by now
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: check for the deploy tokens
+        id: tokens
+        run: |
+          if [ -z "$FLY_API_TOKEN_API" ] || [ -z "$FLY_API_TOKEN_WEB" ]; then
+            echo "::notice title=deploy skipped::Add FLY_API_TOKEN_API and FLY_API_TOKEN_WEB repository secrets to deploy from CI."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
+        if: steps.tokens.outputs.skip != 'true'
+      - name: deploy the api
+        if: steps.tokens.outputs.skip != 'true'
+        working-directory: backend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API }}
+        run: flyctl deploy --remote-only --wait-timeout 5m
+      - name: deploy the gateway
+        if: steps.tokens.outputs.skip != 'true'
+        working-directory: frontend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WEB }}
+        run: flyctl deploy --remote-only --wait-timeout 5m
+      - name: smoke test
+        if: steps.tokens.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          get() { curl -sS --retry 6 --retry-all-errors --retry-delay 5 "$@"; }
+          # the database, queue and cache the api reports are reachable
+          get -f "$API_URL/ready"; echo
+          get -f "$WEB_URL/healthz" > /dev/null
+          # the gateway reaches the api: signed out is a 401 from the api, not a 502
+          code=$(get -o /dev/null -w "%{http_code}" "$WEB_URL/api/auth/me")
+          test "$code" = 401 || { echo "gateway -> api gave $code"; exit 1; }
+          # a guest upload goes through the queue and comes back ready
+          printf 'region,amount\nnorth,10\nsouth,30\n' > smoke.csv
+          id=$(get -f -F "file=@smoke.csv;type=text/csv" "$WEB_URL/api/upload" \
+               | python3 -c "import sys,json; print(json.load(sys.stdin)['dataset_id'])")
+          for _ in $(seq 30); do
+            status=$(get -f "$WEB_URL/api/datasets/$id" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+            [ "$status" = ready ] && break
+            [ "$status" = failed ] && { echo "ingest failed"; exit 1; }
+            sleep 2
+          done
+          test "$status" = ready || { echo "upload stuck in $status"; exit 1; }
+          echo "live: upload $id is ready"

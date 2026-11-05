@@ -19,7 +19,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 1,
       "gridPos": {
@@ -47,7 +47,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum(rate(insightiq_queries_total[5m])) * 60",
           "refId": "A"
@@ -60,7 +60,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 2,
       "gridPos": {
@@ -88,7 +88,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum(rate(insightiq_answer_cache_total{result=\"hit\"}[1h])) / clamp_min(sum(rate(insightiq_answer_cache_total[1h])), 1e-9)",
           "refId": "A"
@@ -101,7 +101,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 3,
       "gridPos": {
@@ -129,7 +129,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum(rate(insightiq_queries_total{outcome!~\"ok|cached\"}[1h])) / clamp_min(sum(rate(insightiq_queries_total[1h])), 1e-9)",
           "refId": "A"
@@ -142,7 +142,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 4,
       "gridPos": {
@@ -170,7 +170,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum(insightiq_ingest_queue_depth) or vector(0)",
           "refId": "A"
@@ -196,7 +196,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 6,
       "gridPos": {
@@ -228,7 +228,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (route) (rate(insightiq_http_requests_total{route!~\"/health|/ready\"}[1m]))",
           "legendFormat": "{{route}}",
@@ -242,7 +242,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 7,
       "gridPos": {
@@ -274,7 +274,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le, route) (rate(insightiq_http_request_duration_seconds_bucket{route!~\"/health|/ready\"}[5m])))",
           "legendFormat": "{{route}}",
@@ -288,7 +288,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 8,
       "gridPos": {
@@ -320,7 +320,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (status) (rate(insightiq_http_requests_total{status=~\"4..|5..\"}[5m]))",
           "legendFormat": "{{status}}",
@@ -347,7 +347,7 @@
       "description": "ok = answered by the model, cached = served from the answer cache, numbers = HTTP error code",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 10,
       "gridPos": {
@@ -379,7 +379,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (outcome) (rate(insightiq_queries_total[5m]))",
           "legendFormat": "{{outcome}}",
@@ -393,7 +393,7 @@
       "description": "Uncached answers, end to end",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 11,
       "gridPos": {
@@ -425,7 +425,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.5, sum by (le) (rate(insightiq_query_duration_seconds_bucket{cached=\"false\"}[5m])))",
           "legendFormat": "p50",
@@ -434,7 +434,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(insightiq_query_duration_seconds_bucket{cached=\"false\"}[5m])))",
           "legendFormat": "p95",
@@ -448,7 +448,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 12,
       "gridPos": {
@@ -480,7 +480,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (limit) (rate(insightiq_rate_limited_total[5m]))",
           "legendFormat": "{{limit}}",
@@ -507,7 +507,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 14,
       "gridPos": {
@@ -539,7 +539,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le, step) (rate(insightiq_llm_request_duration_seconds_bucket[5m])))",
           "legendFormat": "{{step}}",
@@ -553,7 +553,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 15,
       "gridPos": {
@@ -585,7 +585,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (step, kind) (rate(insightiq_llm_tokens_total[5m])) * 60",
           "legendFormat": "{{step}} {{kind}}",
@@ -599,7 +599,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 16,
       "gridPos": {
@@ -631,7 +631,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (step, outcome) (rate(insightiq_llm_request_duration_seconds_count[5m]))",
           "legendFormat": "{{step}} {{outcome}}",
@@ -658,7 +658,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 18,
       "gridPos": {
@@ -690,7 +690,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum(rate(insightiq_fewshot_examples_sum[5m])) / clamp_min(sum(rate(insightiq_fewshot_examples_count[5m])), 1e-9)",
           "legendFormat": "avg",
@@ -704,7 +704,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 19,
       "gridPos": {
@@ -736,7 +736,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (helpful) (increase(insightiq_feedback_total[1h]))",
           "legendFormat": "helpful={{helpful}}",
@@ -750,7 +750,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 20,
       "gridPos": {
@@ -782,7 +782,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(insightiq_retrieval_duration_seconds_bucket[5m])))",
           "legendFormat": "retrieval",
@@ -791,7 +791,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(insightiq_sql_execution_duration_seconds_bucket[5m])))",
           "legendFormat": "duckdb",
@@ -818,7 +818,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 22,
       "gridPos": {
@@ -850,7 +850,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (format, outcome) (increase(insightiq_ingest_total[15m]))",
           "legendFormat": "{{format}} {{outcome}}",
@@ -864,7 +864,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 23,
       "gridPos": {
@@ -896,7 +896,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le, format) (rate(insightiq_ingest_duration_seconds_bucket[15m])))",
           "legendFormat": "{{format}}",
@@ -910,7 +910,7 @@
       "description": "",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "id": 24,
       "gridPos": {
@@ -942,7 +942,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${datasource}"
           },
           "expr": "sum by (status) (insightiq_datasets)",
           "legendFormat": "{{status}}",
@@ -952,7 +952,22 @@
     }
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      }
+    ]
   },
   "annotations": {
     "list": []

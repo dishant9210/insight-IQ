@@ -17,7 +17,11 @@ _redis: Redis | None = None
 def get_redis() -> Redis | None:
     global _redis
     if _redis is None and REDIS_URL:
-        _redis = Redis.from_url(REDIS_URL)
+        # hosted Redis (Upstash) drops idle connections; ping one that's been
+        # idle before reusing it. No socket_timeout: the worker blocks on BLPOP.
+        _redis = Redis.from_url(
+            REDIS_URL, health_check_interval=30, socket_connect_timeout=5, socket_keepalive=True,
+        )
     return _redis
 
 class RedisStore:

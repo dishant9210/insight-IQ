@@ -25,6 +25,8 @@ DATABASE_URL = _database_url()
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
+    # serverless Postgres (Neon) suspends when idle and drops its connections
+    pool_recycle=300,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
 )
 SessionLocal = sessionmaker(engine, expire_on_commit=False)

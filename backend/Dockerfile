@@ -17,7 +17,7 @@ RUN if [ -n "$EMBEDDING_MODEL" ]; then \
       python -c "from fastembed import TextEmbedding; TextEmbedding('$EMBEDDING_MODEL')"; \
     fi
 
-COPY alembic.ini .
+COPY alembic.ini start.sh ./
 COPY migrations ./migrations
 COPY app ./app
 
@@ -25,5 +25,6 @@ RUN mkdir -p /data/uploads
 
 EXPOSE 8000
 
-# migrate, then serve. The worker uses the same image: `python -m app.worker`
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# migrate, then serve (plus the worker when RUN_WORKER=true, see start.sh).
+# Compose runs the worker as its own service: `python -m app.worker`
+CMD ["./start.sh"]

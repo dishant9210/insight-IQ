@@ -1,5 +1,8 @@
 """OpenTelemetry tracing. Off unless OTEL_EXPORTER_OTLP_ENDPOINT is set; then
-spans go out over OTLP/HTTP (Tempo in compose, any OTLP backend elsewhere).
+spans go out over OTLP/HTTP (Tempo in compose, Grafana Cloud on Fly). With
+OTEL_LOGS_EXPORTER=otlp, log records go to the same endpoint carrying their
+trace ids, so a backend that also stores logs (Grafana Cloud's Loki) links
+the two. Tempo alone doesn't take logs, so compose leaves that off.
 
 A question becomes one trace: the HTTP request, the embedding + example
 search, both model calls, the DuckDB query and every SQL statement against
@@ -14,13 +17,15 @@ from opentelemetry import propagate, trace
 log = logging.getLogger(__name__)
 
 ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+EXPORT_LOGS = os.getenv("OTEL_LOGS_EXPORTER", "none").lower() == "otlp"
 tracer = trace.get_tracer("insightiq")
 
 _provider = None
+_log_provider = None
 
 def setup(service_name: str, app=None):
     """Install the tracer provider and auto-instrumentation. Safe to call when tracing is off."""
-    global _provider
+    global _provider, _log_provider
     if not ENDPOINT or _provider is not None:
         return
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -35,12 +40,25 @@ def setup(service_name: str, app=None):
     _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(_provider)
 
+    if EXPORT_LOGS:
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.instrumentation.logging.handler import LoggingHandler
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+        _log_provider = LoggerProvider(resource=_provider.resource)
+        _log_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+        set_logger_provider(_log_provider)
+        # beside the stdout handler logging_setup installed, not instead of it
+        logging.getLogger().addHandler(LoggingHandler(logger_provider=_log_provider))
+
     _trace_sql(engine)
     HTTPXClientInstrumentor().instrument()          # the Groq client is httpx underneath
     if app is not None:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready")
-    log.info("tracing to %s as %s", ENDPOINT, service)
+    log.info("tracing to %s as %s%s", ENDPOINT, service, " (and logs)" if EXPORT_LOGS else "")
 
 def _trace_sql(engine):
     """A span per SQL statement against the metadata database. (The upstream
@@ -74,6 +92,8 @@ def flush():
     """The worker runs each job in a fork that exits right after — send its spans first."""
     if _provider is not None:
         _provider.force_flush(timeout_millis=5000)
+    if _log_provider is not None:
+        _log_provider.force_flush(timeout_millis=5000)
 
 def carrier() -> dict:
     """Current trace context as a dict that can ride along with a job."""

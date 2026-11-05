@@ -1,5 +1,7 @@
 app = "insightiq-api"
 primary_region = "sin"
+# headroom for the api + worker + a forked job on a 512 MB machine
+swap_size_mb = 512
 
 [build]
 
@@ -11,10 +13,22 @@ primary_region = "sin"
   DATASET_TTL_HOURS = "24"
   # Fly's proxy sets this to the real client IP (and overwrites any client value)
   CLIENT_IP_HEADER = "Fly-Client-IP"
-  # set after the frontend is deployed:
-  #   fly secrets set ALLOWED_ORIGINS=https://<your-app>.vercel.app
-  # and the model key:
-  #   fly secrets set GROQ_API_KEY=gsk_...
+  # fastembed needs ~390 MB on its own; too much beside the api and worker here
+  EMBEDDER = "hash"
+  # the ingest worker runs in this machine (it needs the volume), once REDIS_URL is set
+  RUN_WORKER = "true"
+  LOG_FORMAT = "json"
+  # with OTEL_EXPORTER_OTLP_ENDPOINT set, logs go to Grafana Cloud next to the traces
+  OTEL_LOGS_EXPORTER = "otlp"
+  OTEL_RESOURCE_ATTRIBUTES = "deployment.environment=fly"
+  # secrets (fly secrets set ... -a insightiq-api), see "Deploying" in the README:
+  #   GROQ_API_KEY, JWT_SECRET, GATEWAY_TOKEN (same value on insightiq-web)
+  #   DATABASE_URL                  Neon, the direct (non-pooler) connection string
+  #   REDIS_URL                     Upstash, rediss://...
+  #   OTEL_EXPORTER_OTLP_ENDPOINT   Grafana Cloud OTLP endpoint
+  #   OTEL_EXPORTER_OTLP_HEADERS    Authorization=Basic%20<base64 instance:token>
+  # without the last four the app falls back to SQLite on the volume, in-process
+  # parsing, an in-memory cache and no tracing
 
 [http_service]
   internal_port = 8000
@@ -30,10 +44,15 @@ primary_region = "sin"
     method = "GET"
     path = "/health"
 
-# Fly scrapes this into its managed Prometheus (dashboards at fly-metrics.net);
-# the port isn't exposed publicly
-[metrics]
+# Fly scrapes these into its managed Prometheus, which Grafana Cloud reads as a
+# data source. Neither port is exposed publicly.
+[[metrics]]
   port = 9091
+  path = "/metrics"
+
+# the worker's (start.sh gives it its own port)
+[[metrics]]
+  port = 9092
   path = "/metrics"
 
 [[mounts]]

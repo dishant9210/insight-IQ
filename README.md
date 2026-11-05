@@ -143,10 +143,10 @@ adds Prometheus (http://localhost:9090), Tempo and Grafana (http://localhost:300
 | :--- | :--- |
 | **Metrics** | Prometheus format on a separate internal port (`METRICS_PORT`, 9091), never on the public api port. Request rate / latency / errors per route template; questions by outcome; answer latency; LLM latency and **tokens** per step (SQL vs insight); cache hit ratio; 429s per limit; few-shot examples per prompt; feedback; DuckDB time; files parsed by format and outcome; ingest latency; queue depth; datasets by status. The worker forks per job, so it runs `prometheus_client` in multiprocess mode and job counters survive the fork. |
 | **Traces** | OpenTelemetry over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. A question is one trace: HTTP request → `retrieve` → `llm.sql` → `sql.execute` → `llm.insight`, with every Postgres statement and the Groq HTTP calls underneath. An upload's trace **continues on the worker** — the trace context rides along with the job. |
-| **Logs** | `LOG_FORMAT=json` writes one JSON object per line with `trace_id` / `span_id`, so a log line links to its trace. |
+| **Logs** | `LOG_FORMAT=json` writes one JSON object per line with `trace_id` / `span_id`, so a log line links to its trace. With `OTEL_LOGS_EXPORTER=otlp` they're also shipped over OTLP (to Loki on Grafana Cloud). |
 | **Dashboard** | Provisioned from [`observability/grafana/dashboards/insightiq.json`](observability/grafana/dashboards/insightiq.json): API, questions, model, retrieval & SQL, ingest. |
 
-CI boots this stack too and checks that both services are scraped, that the worker's counters made it through the fork, that an upload's trace contains spans from both the api and the worker, and that the dashboard is provisioned. On Fly, the same `/metrics` port is scraped by Fly's managed Prometheus (`[metrics]` in `fly.toml`).
+CI boots this stack too and checks that both services are scraped, that the worker's counters made it through the fork, that an upload's trace contains spans from both the api and the worker, and that the dashboard is provisioned. On Fly, the api and worker `/metrics` ports are scraped by Fly's managed Prometheus, and traces and logs go to Grafana Cloud (see [Deployment](#-deployment)).
 
 ---
 
@@ -179,7 +179,7 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | **Queue / cache** | Redis — RQ worker, answer cache, rate limits |
 | **AI/LLM** | Groq (GPT-OSS 120B by default, any Groq model via `GROQ_MODEL`), fastembed (bge-small-en-v1.5) for retrieval |
 | **Observability** | Prometheus, OpenTelemetry, Grafana Tempo, Grafana |
-| **Infrastructure** | Docker, Docker Compose, GitHub Actions, Fly.io |
+| **Infrastructure** | Docker, Docker Compose, GitHub Actions, Fly.io, Neon, Upstash, Grafana Cloud |
 
 ---
 
@@ -207,6 +207,7 @@ cp frontend/.env.example frontend/.env
 | `UPLOAD_DIR` | `uploads` | DuckDB files live here |
 | `DATABASE_URL` | SQLite in `UPLOAD_DIR` | `postgresql://...` in compose |
 | `REDIS_URL` | — | set it to parse uploads on the worker |
+| `RUN_WORKER` | `false` | `true` runs the worker in the api container too (Fly), when `REDIS_URL` is set |
 | `MAX_UPLOAD_MB` | `50` | |
 | `MAX_RESULT_ROWS` | `1000` | |
 | `QUERY_TIMEOUT_SECONDS` | `20` | |
@@ -218,6 +219,8 @@ cp frontend/.env.example frontend/.env
 | `SCHEMA_MAX_TABLES` | `6` | above this, only the closest sheets are sent |
 | `METRICS_PORT` | `9091` | Prometheus `/metrics`, `0` = off |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | e.g. `http://tempo:4318`; tracing is off when unset |
+| `OTEL_EXPORTER_OTLP_HEADERS` | — | e.g. `Authorization=Basic%20...` for Grafana Cloud |
+| `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the OTLP endpoint |
 | `LOG_FORMAT` | `text` | `json` for one object per line with trace ids |
 | `CLIENT_IP_HEADER` | — | header a trusted proxy sets with the real client IP (`Fly-Client-IP` on Fly) |
 | `JWT_SECRET` | random per start | set it (`openssl rand -hex 32`) so sessions survive restarts and replicas agree |
@@ -264,19 +267,48 @@ The suite runs the real Alembic migrations, uses fakeredis for the queue, and st
 
 ## 🚀 Deployment
 
-Both halves run on [Fly.io](https://fly.io): the API with a persistent volume for the DuckDB files, and the gateway (nginx with the React build) proxying `/api` to it. Live at https://insightiq-web.fly.dev (machines stop when idle, so the first request can take a few seconds).
+Live at https://insightiq-web.fly.dev on free tiers. Machines stop when idle, so the first request can take a few seconds.
 
-### Backend
+```
+browser ── insightiq-web (Fly) ── nginx gateway: React build, /api proxy, limits, headers
+                 │
+           insightiq-api (Fly) ── api + ingest worker in one machine, DuckDB files on a volume
+             │        │        └── traces + logs (OTLP) ──> Grafana Cloud (Tempo, Loki)
+           Neon     Upstash        metrics: Fly's Prometheus ──> Grafana Cloud data source
+         Postgres    Redis
+        + pgvector  queue, cache, limits
+```
+
+The worker runs beside the api (`RUN_WORKER=true`, see [`backend/start.sh`](backend/start.sh)) because it parses the upload from the api's disk and a Fly volume belongs to one machine. If either process dies, the other is stopped too, so Fly restarts the machine. Without the managed services the same image falls back to SQLite on the volume, in-process parsing and an in-memory cache.
+
+### 1. Managed services (free tiers)
+Pick the region nearest the Fly machines (Singapore here).
+
+| Service | What to create | Secret |
+| :--- | :--- | :--- |
+| [Neon](https://neon.tech) | a project; copy the connection string with **connection pooling off**, since migrations and prepared statements want a direct connection. pgvector is enabled by the migrations. | `DATABASE_URL` |
+| [Upstash](https://upstash.com) | a Redis database; copy the `rediss://` URL. Eviction must stay off, because the queue lives there. | `REDIS_URL` |
+| [Grafana Cloud](https://grafana.com) | a stack → *Connections → OpenTelemetry (OTLP)*; it gives the endpoint and an `Authorization=Basic%20...` header | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` |
+
+### 2. API
 ```bash
 cd backend
 fly launch --no-deploy        # picks up fly.toml; change the app name if it's taken
 fly volumes create insightiq_data --size 1 --region sin
-fly secrets set GROQ_API_KEY=gsk_... JWT_SECRET=$(openssl rand -hex 32)
+fly secrets set --stage GROQ_API_KEY=gsk_... JWT_SECRET=$(openssl rand -hex 32) \
+  DATABASE_URL='postgresql://...' REDIS_URL='rediss://...' \
+  OTEL_EXPORTER_OTLP_ENDPOINT='https://otlp-gateway-....grafana.net/otlp' \
+  OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic%20...'
 fly deploy
 ```
-`fly.toml` sets `UPLOAD_DIR=/data/uploads` on the mounted volume, a `/health` check, and lets the machine stop when idle so a free-tier app costs nothing between visits. Datasets older than `DATASET_TTL_HOURS` are deleted on the next upload.
+`--stage` holds the secrets until the deploy, so the old image never boots with a queue and no worker. `fly.toml` mounts the volume at `/data`, checks `/health`, and gives the 512 MB machine 512 MB of swap for the api, the worker and a forked job together. Datasets older than `DATASET_TTL_HOURS` are deleted on the next upload.
 
-### Gateway
+Moving an existing deploy off SQLite: after the deploy above, copy the old rows over. It skips rows already there, so it's safe to re-run.
+```bash
+fly ssh console -a insightiq-api -C "python -m app.copy_db sqlite:////data/uploads/insightiq.db"
+```
+
+### 3. Gateway
 `API_UPSTREAM` in `frontend/fly.toml` points at the api app; change it if yours has a different name. Give both apps the same gateway token so the api can trust the client address the gateway sends:
 ```bash
 cd frontend
@@ -285,6 +317,16 @@ token=$(openssl rand -hex 32)
 fly secrets set GATEWAY_TOKEN=$token -a insightiq-web
 fly secrets set GATEWAY_TOKEN=$token -a insightiq-api
 fly deploy
+```
+
+### 4. Dashboard
+Fly already scrapes both `/metrics` ports (`[[metrics]]` in `fly.toml`) into its managed Prometheus. In Grafana Cloud, add a **Prometheus** data source with URL `https://api.fly.io/prometheus/<your-org>/` and a custom header `Authorization: FlyV1 <token>` from `fly tokens create readonly`. Then *Dashboards → Import* [`insightiq.json`](observability/grafana/dashboards/insightiq.json) and pick that data source. Traces and logs come in over OTLP, and a log line's `trace_id` opens its trace.
+
+### 5. Deploys from CI
+[`deploy.yml`](.github/workflows/deploy.yml) runs after CI passes on `main`. It deploys the api, then the gateway, then checks the live site: `/ready`, the gateway reaching the api, and a guest upload going through the queue. Add one deploy token per app as repository secrets to turn it on:
+```bash
+fly tokens create deploy -a insightiq-api   # -> FLY_API_TOKEN_API
+fly tokens create deploy -a insightiq-web   # -> FLY_API_TOKEN_WEB
 ```
 
 ### Docker Compose (self-hosted)
@@ -326,4 +368,4 @@ Every route works without an account. Send `Authorization: Bearer <access_token>
 - [x] Few-shot retrieval from past queries, column notes, schema selection (pgvector)
 - [x] Text-to-SQL eval set in CI
 - [x] Metrics, tracing and dashboards (Prometheus, OpenTelemetry, Tempo, Grafana)
-- [x] Hosted demo
+- [x] Hosted demo on free tiers (Fly, Neon, Upstash, Grafana Cloud) with deploys from CI

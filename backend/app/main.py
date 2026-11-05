@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="InsightIQ",
     description="Natural language analytics",
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
 )
 tracing.setup("insightiq-api", app)
