@@ -1,11 +1,16 @@
 import os
-from fastapi import FastAPI
+import time
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from app import logging_setup, metrics, tracing
+logging_setup.setup()
 
 from app.api.upload import router as upload_router
 from app.api.query import router as query_router
@@ -19,11 +24,33 @@ origins = [
     if o.strip()
 ]
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    metrics.register_state_collector()
+    metrics.serve()
+    yield
+
 app = FastAPI(
     title="InsightIQ",
     description="Natural language analytics",
-    version="0.4.0"
+    version="0.5.0",
+    lifespan=lifespan,
 )
+tracing.setup("insightiq-api", app)
+
+@app.middleware("http")
+async def http_metrics(request: Request, call_next):
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        # the route template, not the raw path, so ids don't explode the label set
+        route = getattr(request.scope.get("route"), "path", "unmatched")
+        metrics.HTTP_REQUESTS.labels(request.method, route, str(status)).inc()
+        metrics.HTTP_LATENCY.labels(request.method, route).observe(time.perf_counter() - started)
 
 app.add_middleware(
     CORSMiddleware,

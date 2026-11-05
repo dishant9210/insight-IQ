@@ -1,4 +1,4 @@
-import uuid, os, json, threading
+import uuid, os, json, threading, logging
 from datetime import datetime, timedelta, timezone
 import duckdb
 import pandas as pd
@@ -7,6 +7,9 @@ from sqlalchemy import select
 
 from app.db import SessionLocal, Dataset, UPLOAD_DIR
 from app.queue import get_queue, JOB_TIMEOUT
+from app import metrics, tracing
+
+log = logging.getLogger(__name__)
 from app.services.loader import get_loader
 
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
@@ -120,6 +123,7 @@ async def save_upload(file: UploadFile) -> tuple[str, str, bool]:
     queue.enqueue_call(
         ingest,
         args=(dataset_id, raw_path, file.filename),
+        kwargs={"trace_context": tracing.carrier()},   # the worker's span joins this request's trace
         timeout=JOB_TIMEOUT,
         result_ttl=0,
         failure_ttl=24 * 3600,
@@ -158,9 +162,23 @@ def _set(dataset_id: str, **fields):
             setattr(ds, k, v)
         s.commit()
 
-def ingest(dataset_id: str, raw_path: str, filename: str):
+def ingest(dataset_id: str, raw_path: str, filename: str, trace_context: dict | None = None):
     """Parse an uploaded file into its own DuckDB database. Runs on the worker
     (or in-process without Redis); the outcome is recorded on the dataset row."""
+    fmt = filename.rsplit(".", 1)[-1].lower()
+    with tracing.continued(trace_context, "ingest", **{"dataset.id": dataset_id, "file.format": fmt}) as span, \
+            metrics.Timer() as t:
+        outcome = _ingest(dataset_id, raw_path, filename)
+        span.set_attribute("ingest.outcome", outcome)
+        log.info("ingested %s (%s): %s", dataset_id, fmt, outcome)
+    metrics.INGEST.labels(fmt, outcome).inc()
+    metrics.INGEST_LATENCY.labels(fmt).observe(t.seconds)
+
+    from rq import get_current_job
+    if get_current_job() is not None:      # in a worker fork that's about to exit
+        tracing.flush()
+
+def _ingest(dataset_id: str, raw_path: str, filename: str) -> str:
     _set(dataset_id, status="processing")
     ext = "." + filename.rsplit(".", 1)[-1].lower()
     try:
@@ -185,7 +203,7 @@ def ingest(dataset_id: str, raw_path: str, filename: str):
         _remove(_db_path(dataset_id))
         error = e.detail if isinstance(e, HTTPException) else f"Could not parse file: {e}"
         _set(dataset_id, status="failed", error=error)
-        return
+        return "failed"
     finally:
         _remove(raw_path)
 
@@ -209,6 +227,7 @@ def ingest(dataset_id: str, raw_path: str, filename: str):
         warnings=[w for r in results for w in r.warnings],
         tables=tables,
     )
+    return "ready"
 
 def execute_query(dataset_id: str, sql: str) -> tuple[list[dict], bool]:
     """Run an already-validated SELECT against a dataset. Returns (rows, truncated)."""

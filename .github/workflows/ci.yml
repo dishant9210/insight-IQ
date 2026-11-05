@@ -58,11 +58,13 @@ jobs:
       - run: npx eslint src
       - run: npm run build
 
-  # boots the whole stack (postgres, redis, api, worker, frontend) and pushes
-  # a real upload through the queue
+  # boots the whole stack (postgres, redis, api, worker, frontend, plus
+  # prometheus, tempo, grafana) and pushes a real upload through the queue
   compose:
     runs-on: ubuntu-latest
     needs: [backend]
+    env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.observability.yml
     steps:
       - uses: actions/checkout@v4
       - name: start stack
@@ -118,6 +120,42 @@ jobs:
           keys=$(docker compose exec -T redis redis-cli --scan --pattern 'iq:rl:upload:*')
           echo "$keys"
           test -n "$keys"
+      - name: metrics, traces and dashboards
+        run: |
+          set -euo pipefail
+          prom() { curl -s --get http://localhost:9090/api/v1/query --data-urlencode "query=$1" | python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(sum(float(x['value'][1]) for x in r))"; }
+          # both targets scraped, and the worker's per-job counters survived the fork
+          for i in $(seq 1 30); do
+            up=$(prom 'sum(up{job=~"api|worker"})'); parsed=$(prom 'sum(insightiq_ingest_total{outcome="ready"})')
+            echo "targets up: $up, files parsed: $parsed"
+            [ "${up%.*}" = 2 ] && [ "${parsed%.*}" -ge 2 ] && break
+            sleep 2
+          done
+          test "${up%.*}" = 2 && test "${parsed%.*}" -ge 2
+          test "$(prom 'sum(insightiq_http_requests_total{route="/api/upload"})' | cut -d. -f1)" -ge 2
+
+          # an upload is one trace across both services: api request -> worker ingest
+          for i in $(seq 1 30); do
+            tid=$(curl -s --get http://localhost:3200/api/search --data-urlencode 'tags=service.name=insightiq-worker' --data-urlencode 'limit=1' \
+                  | python3 -c "import sys,json; t=json.load(sys.stdin).get('traces') or [{}]; print(t[0].get('traceID',''))")
+            [ -n "$tid" ] && break
+            sleep 2
+          done
+          echo "worker trace: $tid"; test -n "$tid"
+          services=$(curl -s http://localhost:3200/api/traces/$tid | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          names = set()
+          for b in d.get('batches') or d.get('resourceSpans') or []:
+              for a in b['resource']['attributes']:
+                  if a['key'] == 'service.name': names.add(a['value']['stringValue'])
+          print(' '.join(sorted(names)))")
+          echo "services in trace: $services"
+          test "$services" = "insightiq-api insightiq-worker"
+
+          # dashboard provisioned, logs are json with trace ids
+          curl -sf http://localhost:3000/api/dashboards/uid/insightiq | python3 -c "import sys,json; d=json.load(sys.stdin)['dashboard']; print(d['title'], len(d['panels']), 'panels')"
+          docker compose logs --no-color worker | grep -q '"trace_id"'
       - name: logs
         if: failure()
         run: |

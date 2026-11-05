@@ -124,6 +124,25 @@ The [Eval workflow](.github/workflows/eval.yml) runs this against the real model
 
 ---
 
+## 📈 Observability
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+adds Prometheus (http://localhost:9090), Tempo and Grafana (http://localhost:3000, opens on the InsightIQ dashboard).
+
+| Signal | What you get |
+| :--- | :--- |
+| **Metrics** | Prometheus format on a separate internal port (`METRICS_PORT`, 9091), never on the public api port. Request rate / latency / errors per route template; questions by outcome; answer latency; LLM latency and **tokens** per step (SQL vs insight); cache hit ratio; 429s per limit; few-shot examples per prompt; feedback; DuckDB time; files parsed by format and outcome; ingest latency; queue depth; datasets by status. The worker forks per job, so it runs `prometheus_client` in multiprocess mode and job counters survive the fork. |
+| **Traces** | OpenTelemetry over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. A question is one trace: HTTP request → `retrieve` → `llm.sql` → `sql.execute` → `llm.insight`, with every Postgres statement and the Groq HTTP calls underneath. An upload's trace **continues on the worker** — the trace context rides along with the job. |
+| **Logs** | `LOG_FORMAT=json` writes one JSON object per line with `trace_id` / `span_id`, so a log line links to its trace. |
+| **Dashboard** | Provisioned from [`observability/grafana/dashboards/insightiq.json`](observability/grafana/dashboards/insightiq.json): API, questions, model, retrieval & SQL, ingest. |
+
+CI boots this stack too and checks that both services are scraped, that the worker's counters made it through the fork, that an upload's trace contains spans from both the api and the worker, and that the dashboard is provisioned. On Fly, the same `/metrics` port is scraped by Fly's managed Prometheus (`[metrics]` in `fly.toml`).
+
+---
+
 ## 🔒 Security
 
 The SQL that runs comes from a language model, and a user can try to steer it. So the query never gets to decide what it's allowed to do:
@@ -148,6 +167,7 @@ The SQL that runs comes from a language model, and a user can try to steer it. S
 | **Data** | PostgreSQL + pgvector (metadata, query log, embeddings), DuckDB (queries), pandas, pyarrow |
 | **Queue / cache** | Redis — RQ worker, answer cache, rate limits |
 | **AI/LLM** | Groq (GPT-OSS 120B by default, any Groq model via `GROQ_MODEL`), fastembed (bge-small-en-v1.5) for retrieval |
+| **Observability** | Prometheus, OpenTelemetry, Grafana Tempo, Grafana |
 | **Infrastructure** | Docker, Docker Compose, GitHub Actions, Fly.io |
 
 ---
@@ -185,6 +205,9 @@ cp frontend/.env.example frontend/.env
 | `EMBEDDER` | `hash` | `fastembed` (bge-small, ONNX, ~300 MB RAM, understands paraphrases) or `hash` (no model, matches shared wording) |
 | `FEW_SHOT_K` | `3` | past answers per prompt, `0` = off |
 | `SCHEMA_MAX_TABLES` | `6` | above this, only the closest sheets are sent |
+| `METRICS_PORT` | `9091` | Prometheus `/metrics`, `0` = off |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | e.g. `http://tempo:4318`; tracing is off when unset |
+| `LOG_FORMAT` | `text` | `json` for one object per line with trace ids |
 | `CLIENT_IP_HEADER` | — | header a trusted proxy sets with the real client IP (`Fly-Client-IP` on Fly) |
 | `VITE_API_URL` (frontend) | `http://localhost:8000` | |
 
@@ -275,5 +298,5 @@ Any static host works too (Vercel, Netlify): build root `frontend`, env `VITE_AP
 - [x] Rate limiting and answer caching (Redis)
 - [x] Few-shot retrieval from past queries, column notes, schema selection (pgvector)
 - [x] Text-to-SQL eval set in CI
-- [ ] Metrics and dashboards (Prometheus, Grafana)
+- [x] Metrics, tracing and dashboards (Prometheus, OpenTelemetry, Tempo, Grafana)
 - [x] Hosted demo

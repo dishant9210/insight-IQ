@@ -6,6 +6,7 @@ import logging
 import os
 from fastapi import HTTPException, Request, Response
 from app.store import get_store
+from app import metrics
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ def limit(name: str):
                 log.warning("rate limit check failed: %s", e)
                 return
             if count > allowed:
+                metrics.RATE_LIMITED.labels(name).inc()
                 raise HTTPException(
                     429,
                     f"Too many requests. Try again in {reset} seconds.",

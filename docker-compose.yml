@@ -37,6 +37,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ALLOWED_ORIGINS: http://localhost:8080
       EMBEDDER: fastembed
+      METRICS_PORT: "9091"     # /metrics, not published outside the compose network
     volumes:
       - datasets:/data
     depends_on:
@@ -57,7 +58,10 @@ services:
     env_file:
       - path: backend/.env
         required: false
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # jobs run in forks; metrics are shared through files here
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
     volumes:
       - datasets:/data
     depends_on:

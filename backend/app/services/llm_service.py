@@ -1,14 +1,15 @@
-import os, asyncio
+import os, asyncio, time
 import duckdb
 import groq
 from fastapi import HTTPException
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 from app.services.sql_guard import clean_sql, validate_sql
 from app.services.dataset_service import execute_query
+from app import metrics
+from app.tracing import tracer
 
 load_dotenv()
 
@@ -74,8 +75,9 @@ def _chains():
             raise HTTPException(503, "GROQ_API_KEY is not set on the server, so questions can't be answered yet.")
         # temperature 0 — we want the same question to produce the same SQL
         llm = ChatGroq(model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"), temperature=0)
-        sql_chain = SQL_PROMPT | llm | StrOutputParser()
-        insight_chain = INSIGHT_PROMPT | llm | StrOutputParser()
+        # no output parser: _ask reads the text and the token usage off the message
+        sql_chain = SQL_PROMPT | llm
+        insight_chain = INSIGHT_PROMPT | llm
     return sql_chain, insight_chain
 
 def _fail(status: int, detail: str, sql: str) -> HTTPException:
@@ -84,15 +86,31 @@ def _fail(status: int, detail: str, sql: str) -> HTTPException:
     e.sql = sql
     return e
 
-async def _ask(chain, inputs: dict) -> str:
-    try:
-        return await chain.ainvoke(inputs)
-    except groq.AuthenticationError:
-        raise HTTPException(502, "Language model rejected the API key. Check GROQ_API_KEY.")
-    except groq.RateLimitError:
-        raise HTTPException(429, "Language model rate limit hit. Try again in a moment.")
-    except groq.APIError as e:
-        raise HTTPException(502, f"Language model request failed: {e.__class__.__name__}")
+async def _ask(chain, inputs: dict, step: str) -> str:
+    """One model call, timed and traced, with its token usage counted."""
+    started = time.perf_counter()
+    with tracer.start_as_current_span(f"llm.{step}") as span:
+        outcome = "error"
+        try:
+            msg = await chain.ainvoke(inputs)
+            outcome = "ok"
+        except groq.AuthenticationError:
+            raise HTTPException(502, "Language model rejected the API key. Check GROQ_API_KEY.")
+        except groq.RateLimitError:
+            outcome = "rate_limited"
+            raise HTTPException(429, "Language model rate limit hit. Try again in a moment.")
+        except groq.APIError as e:
+            raise HTTPException(502, f"Language model request failed: {e.__class__.__name__}")
+        finally:
+            span.set_attribute("llm.outcome", outcome)
+            metrics.LLM_LATENCY.labels(step, outcome).observe(time.perf_counter() - started)
+
+        usage = getattr(msg, "usage_metadata", None) or {}
+        for kind in ("input_tokens", "output_tokens"):
+            if usage.get(kind):
+                metrics.LLM_TOKENS.labels(step, kind.split("_")[0]).inc(usage[kind])
+                span.set_attribute(f"llm.{kind}", usage[kind])
+    return msg.content if hasattr(msg, "content") else msg
 
 async def generate_sql(
     question: str,
@@ -106,7 +124,7 @@ async def generate_sql(
         "schema": _schema_str(tables, dictionary),
         "examples": _examples_str(examples or []),
         "question": question
-    })
+    }, step="sql")
     sql = clean_sql(raw_sql)
     try:
         validate_sql(sql)
@@ -127,7 +145,9 @@ async def answer_question(
 
     # Step 3: Execute (off the event loop — DuckDB is synchronous)
     try:
-        results, truncated = await asyncio.to_thread(execute_query, dataset_id, sql)
+        with tracer.start_as_current_span("sql.execute"), metrics.Timer() as t:
+            results, truncated = await asyncio.to_thread(execute_query, dataset_id, sql)
+        metrics.SQL_LATENCY.observe(t.seconds)
     except duckdb.InterruptException:
         raise _fail(504, "Query timed out", sql)
     except duckdb.Error as e:
@@ -139,7 +159,7 @@ async def answer_question(
         insight = await _ask(insight_chain, {
             "question": question,
             "results": str(results[:10])
-        })
+        }, step="insight")
     else:
         insight = "No rows matched this question."
 

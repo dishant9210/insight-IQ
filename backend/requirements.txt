@@ -25,3 +25,10 @@ openpyxl==3.1.5
 # retrieval
 pgvector==0.5.1
 fastembed==0.9.1
+
+# observability
+prometheus-client==0.26.0
+opentelemetry-sdk==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-instrumentation-fastapi==0.66b2
+opentelemetry-instrumentation-httpx==0.66b2

@@ -9,6 +9,8 @@ from app.services.embeddings import embed_one, get_embedder
 from app.services.llm_service import answer_question
 from app.services.dataset_service import get_ready_dataset, get_dataset, tables_of
 from app.services.rate_limit import limit
+from app import metrics
+from app.tracing import tracer
 
 log = logging.getLogger(__name__)
 
@@ -24,14 +26,20 @@ def _log(**fields) -> int:
 async def _retrieve(question: str, schema: str, tables: list[dict], dictionary: dict):
     """(question vector, few-shot examples, tables to show). Retrieval only
     improves the prompt, so if it breaks the question still goes through."""
-    try:
-        vector = await asyncio.to_thread(embed_one, question)
-        examples = await asyncio.to_thread(retrieval.find_examples, schema, vector)
-        chosen = await asyncio.to_thread(retrieval.select_tables, tables, vector, dictionary)
-        return vector, examples, chosen
-    except Exception as e:
-        log.warning("retrieval failed, answering without it: %s", e)
-        return None, [], tables
+    with tracer.start_as_current_span("retrieve") as span, metrics.Timer() as t:
+        try:
+            vector = await asyncio.to_thread(embed_one, question)
+            examples = await asyncio.to_thread(retrieval.find_examples, schema, vector)
+            chosen = await asyncio.to_thread(retrieval.select_tables, tables, vector, dictionary)
+        except Exception as e:
+            log.warning("retrieval failed, answering without it: %s", e)
+            span.set_attribute("retrieval.error", str(e))
+            vector, examples, chosen = None, [], tables
+        span.set_attribute("retrieval.examples", len(examples))
+        span.set_attribute("retrieval.tables", len(chosen))
+    metrics.RETRIEVAL_LATENCY.observe(t.seconds)
+    metrics.FEWSHOT.observe(len(examples))
+    return vector, examples, chosen
 
 @router.post("/query", response_model=QueryResponse, dependencies=[Depends(limit("query"))])
 async def query_dataset(req: QueryRequest):
@@ -44,10 +52,13 @@ async def query_dataset(req: QueryRequest):
     elapsed = lambda: int((time.perf_counter() - started) * 1000)
 
     cached = answer_cache.get(req.dataset_id, req.question, dictionary)
+    metrics.ANSWER_CACHE.labels("miss" if cached is None else "hit").inc()
     if cached is not None:
         # no embedding: the original row already represents this question for retrieval
         qid = _log(**base, sql=cached["sql"], status="ok", row_count=len(cached["result"]),
                    latency_ms=elapsed(), cached=True)
+        metrics.QUERIES.labels("cached").inc()
+        metrics.QUERY_LATENCY.labels("true").observe(elapsed() / 1000)
         return QueryResponse(question=req.question, query_id=qid, cached=True, **cached)
 
     vector, examples, chosen = await _retrieve(req.question, schema, tables, dictionary)
@@ -61,6 +72,7 @@ async def query_dataset(req: QueryRequest):
         )
     except HTTPException as e:
         _log(**base, sql=getattr(e, "sql", None), status="error", error=str(e.detail), latency_ms=elapsed())
+        metrics.QUERIES.labels(str(e.status_code)).inc()
         raise
 
     result |= {"examples_used": len(examples), "tables_used": [t["name"] for t in chosen]}
@@ -68,6 +80,8 @@ async def query_dataset(req: QueryRequest):
     qid = _log(**base, sql=result["sql"], status="ok", row_count=len(result["result"]),
                latency_ms=elapsed(), embedding=vector,
                embedder=get_embedder().name if vector is not None else None)
+    metrics.QUERIES.labels("ok").inc()
+    metrics.QUERY_LATENCY.labels("false").observe(elapsed() / 1000)
     return QueryResponse(question=req.question, query_id=qid, **result)
 
 @router.post("/queries/{query_id}/feedback", dependencies=[Depends(limit("feedback"))])
@@ -81,6 +95,7 @@ def query_feedback(query_id: int, req: FeedbackRequest):
         row.feedback = req.helpful
         s.commit()
         dataset_id, question = row.dataset_id, row.question
+    metrics.FEEDBACK.labels(str(req.helpful).lower()).inc()
 
     if not req.helpful:
         try:

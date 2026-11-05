@@ -30,6 +30,12 @@ primary_region = "sin"
     method = "GET"
     path = "/health"
 
+# Fly scrapes this into its managed Prometheus (dashboards at fly-metrics.net);
+# the port isn't exposed publicly
+[metrics]
+  port = 9091
+  path = "/metrics"
+
 [[mounts]]
   source = "insightiq_data"
   destination = "/data"
